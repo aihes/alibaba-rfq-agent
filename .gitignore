@@ -1,0 +1,55 @@
+# Dependencies and package-manager caches
+node_modules/
+**/node_modules/
+.npm/
+.pnpm-store/
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+.npmrc
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Browser automation output
+playwright-report/
+test-results/
+
+# Runtime data: may contain buyer details, RFQ text, screenshots and quotes
+data/
+log/
+tmp/
+downloads/
+screenshots/
+recordings/
+*.log
+
+# Build, test and generated output
+dist/
+build/
+coverage/
+*.tsbuildinfo
+*.mov
+*.webm
+
+# Machine-specific configuration overrides
+config/*.local.json
+config/local*.json
+plugins/**/.mcp.local.json
+
+# The Remotion demo currently has its own Git history and private run assets.
+# Keep it out of the main repository until it is intentionally flattened or
+# published as a separate repository.
+demo-video/
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.history/
+*.swp
+*.swo

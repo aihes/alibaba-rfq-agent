@@ -1,0 +1,32 @@
+{
+  "mcpServers": {
+    "alibaba-rfq-midscene": {
+      "command": "node",
+      "cwd": ".",
+      "args": [
+        "scripts/server.mjs"
+      ],
+      "enabled": true,
+      "startup_timeout_sec": 30,
+      "tool_timeout_sec": 300,
+      "default_tools_approval_mode": "auto",
+      "tools": {
+        "midscene_fill_quote": {
+          "approval_mode": "prompt"
+        },
+        "midscene_submit_quote": {
+          "approval_mode": "prompt"
+        }
+      },
+      "env_vars": [
+        "HOME",
+        "PATH",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_MODEL",
+        "OPENROUTER_API_KEY",
+        "DASHSCOPE_API_KEY"
+      ]
+    }
+  }
+}

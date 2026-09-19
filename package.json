@@ -1,0 +1,29 @@
+{
+  "name": "alibaba-rfq-agent",
+  "version": "0.5.1",
+  "private": true,
+  "type": "module",
+  "description": "Alibaba RFQ collector, guarded pricing engine and quote-draft assistant for the user's existing logged-in Chrome session.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "once": "node src/cli.js once",
+    "watch": "node src/cli.js watch",
+    "fill": "node src/cli.js fill",
+    "submit": "node src/cli.js submit",
+    "contact": "node src/cli.js contact",
+    "doctor": "node src/cli.js doctor",
+    "test": "node --test",
+    "midscene:status": "node plugins/alibaba-rfq-midscene/scripts/cli.mjs status",
+    "midscene:scan": "node plugins/alibaba-rfq-midscene/scripts/cli.mjs scan",
+    "midscene:analyze": "node plugins/alibaba-rfq-midscene/scripts/cli.mjs analyze",
+    "midscene:fill": "node plugins/alibaba-rfq-midscene/scripts/cli.mjs fill",
+    "midscene:submit": "node plugins/alibaba-rfq-midscene/scripts/cli.mjs submit"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.274",
+    "@midscene/web": "^1.12.9",
+    "dotenv": "^16.6.1"
+  }
+}

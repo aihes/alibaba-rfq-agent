@@ -1,0 +1,34 @@
+{
+  "searchBaseUrl": "https://sourcing.alibaba.com/rfq_search_list.htm",
+  "searchTerms": [
+    "kraft paper food bag",
+    "stainless steel tumbler 40oz",
+    "corrugated carton box",
+    "paper shopping bag",
+    "cloth bag",
+    "folding carton box"
+  ],
+  "maxCardsPerSearch": 30,
+  "maxNewRfqsPerCycle": 12,
+  "navigationDelayMs": 1200,
+  "supportedCategories": {
+    "kraft_food_bag": {
+      "keywords": ["kraft", "paper bag", "food bag", "greaseproof", "square bottom", "sos bag", "burger", "fries"]
+    },
+    "tumbler_40oz": {
+      "keywords": ["40oz", "40 oz", "tumbler", "vacuum cup", "stainless steel cup", "travel mug"]
+    },
+    "corrugated_rsc": {
+      "keywords": ["corrugated", "carton", "shipping box", "rsc", "0201", "cardboard box"]
+    },
+    "paper_shopping_bag": {
+      "keywords": ["paper shopping bag", "paper gift bag", "paper handle bag", "white card paper bag"]
+    },
+    "cloth_bag": {
+      "keywords": ["cloth bag", "cotton bag", "canvas bag", "non woven bag", "drawstring bag"]
+    },
+    "folding_carton": {
+      "keywords": ["folding carton", "paper box", "tuck box", "drawer box", "pillow box", "display box"]
+    }
+  }
+}

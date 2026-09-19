@@ -1,0 +1,3 @@
+interface:
+  display_name: "Alibaba RFQ Midscene"
+  short_description: "Use logged-in Chrome to analyze and safely quote Alibaba RFQs"

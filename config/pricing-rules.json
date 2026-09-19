@@ -1,0 +1,30 @@
+{
+  "currency": "USD",
+  "fxRmbPerUsd": 7.2,
+  "tradeTerm": "EXW",
+  "rulesVersion": "2026-09-16-poc-1",
+  "rules": {
+    "kraft_food_bag": {
+      "validatedScenario": "110x110mm face, 50mm square bottom, 80gsm yellow kraft, 1-color 25% coverage, one-side greaseproof, F05 SOS bottom",
+      "baseQty": 25000,
+      "unitPriceUsd": 0.019,
+      "setupUsd": 70,
+      "requiredFields": ["quantity", "widthMm", "heightMm", "bottomMm", "gsm", "material", "greaseproof"]
+    },
+    "tumbler_40oz": {
+      "validatedScenario": "40oz auto tumbler, 304 inner/outer, black powder coating, 360-degree heat-transfer full wrap, white box",
+      "baseQty": 150,
+      "unitPriceUsd": 7.5,
+      "setupUsd": 170,
+      "requiredFields": ["quantity", "capacityOz", "material", "printing"]
+    },
+    "corrugated_rsc": {
+      "validatedScenario": "C01/0201 RSC, 310x235x165mm, 3-ply B flute, kraft 175/140gsm plus 110gsm medium, no print",
+      "exactTiers": {
+        "500": {"unitPriceUsd": 0.99, "setupUsd": 0, "conditional": true},
+        "1000": {"unitPriceUsd": 0.6, "setupUsd": 0, "conditional": false}
+      },
+      "requiredFields": ["quantity", "lengthMm", "widthMm", "heightMm", "flute", "printing"]
+    }
+  }
+}

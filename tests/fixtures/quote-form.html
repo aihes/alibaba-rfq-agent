@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Alibaba quote form fixture</title></head>
+<body>
+  <main>
+    <label>Product name <input class="ui2-form-col12" type="text"></label>
+    <label>Product code <input class="ui2-form-col8" type="text"></label>
+    <label>Product details <textarea placeholder="材料、尺寸、用途、工艺等等"></textarea></label>
+    <label>Trade term <select class="quo-form-validator-item"><option>FOB</option><option>EXW</option></select></label>
+    <label>Port <input class="ui2-form-col8" type="text"></label>
+    <label>Valid until <input class="ui2-form-col6" type="text"></label>
+    <label>Currency <select class="quo-form-validator-item"><option>USD</option></select></label>
+    <label>Unit <select class="quo-form-validator-item"><option>Pieces</option></select></label>
+    <label>Payment <select class="quo-form-validator-item"><option>T/T</option></select></label>
+    <label>Quantity <input class="quo-ladder-price-input" type="text"></label>
+    <label>Price <input class="quo-ladder-price-input" type="text"></label>
+    <label><input class="ui2-radio-customize-val" type="radio" name="sample" value="Y">Sample yes</label>
+    <label><input class="ui2-radio-customize-val" type="radio" name="sample" value="N">Sample no</label>
+    <label>Buyer message <textarea class="textarea-other"></textarea></label>
+    <button id="form-submit" type="button">Submit quotation</button>
+    <div id="submit-result" role="status"></div>
+  </main>
+  <script>
+    document.querySelector("#form-submit").addEventListener("click", () => {
+      document.querySelector("#submit-result").textContent = "Quotation submitted successfully";
+      document.body.dataset.submitCount = String(Number(document.body.dataset.submitCount || "0") + 1);
+    });
+  </script>
+</body>
+</html>

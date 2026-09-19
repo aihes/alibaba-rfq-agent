@@ -1,0 +1,19 @@
+{
+  "name": "alibaba-rfq-midscene",
+  "version": "0.2.0",
+  "description": "Control logged-in Alibaba RFQ pages through Midscene.js, analyze requests with the local Claude/GLM agent, and enforce deterministic quote policy.",
+  "author": {
+    "name": "AI突击队"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Alibaba RFQ Midscene",
+    "shortDescription": "Scan, analyze and safely quote Alibaba RFQs through your logged-in Chrome.",
+    "longDescription": "Uses Midscene.js Chrome Bridge to control the user's existing logged-in browser, local Claude/GLM for specification extraction and copy, and deterministic policy gates for pricing and submission.",
+    "developerName": "AI突击队",
+    "category": "Productivity",
+    "capabilities": ["browser-control", "rfq-analysis", "guarded-quoting", "audit-reporting"],
+    "defaultPrompt": "Use my logged-in Chrome to scan Alibaba RFQs, analyze suitable requests, and prepare guarded quotes. Do not submit without immediate confirmation."
+  },
+  "mcpServers": "./.mcp.json"
+}
