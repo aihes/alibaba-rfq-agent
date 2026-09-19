@@ -12,8 +12,6 @@
 
 ## 真实运行证据
 
-[Lark 实跑文档：Alibaba RFQ 报价案例库与一小时运行报告](https://bytedance.sg.larkoffice.com/docx/Bx59dQDMio8edNxObyhlTHmxgVf)（需要相应 Lark 访问权限）保留了完整买家原文、RFQ 图片、Agent 实际输入边界、可核验报价依据、页面动作和运行视频。
-
 2026-09-19 的 Run `20260919T051743Z-one-hour-live-quote` 实际运行 61 分 38 秒：
 
 | 指标 | 结果 |
@@ -27,7 +25,7 @@
 
 这次运行的 15 条需求全部缺少关键参数、偏离已验证场景，或属于尚未建立价格规则的类目。`0` 次提交是安全门禁按设计工作的结果，而不是把“分析完成”误报成“报价成功”。
 
-Lark 文档还保留了 3 个用于解释判断边界的完整 Case：
+该次运行保留了 3 个用于解释判断边界的代表性 Case：
 
 | Case | 买家需求 | 系统结论 | 外部动作 |
 |---|---|---|---|
@@ -35,7 +33,7 @@ Lark 文档还保留了 3 个用于解释判断边界的完整 Case：
 | 2,000 个 FSC E 楞 FEFCO 0201 纸箱 | 数量和结构偏离现有精确价格档 | 询供应商核价并补充强度、印刷和交付信息 | 不报数字 |
 | 100 个 40oz 304 不锈钢杯 | 数量及工艺未完整命中已验证场景 | 补充颜色、Logo 工艺、配件及运费后核价 | 不报数字 |
 
-文档内嵌的 56 秒演示包含约 26 秒真实 Chrome 自动控制录屏，其余画面由同一次运行的 JSON、商品图片和配置生成。演示没有进入最终提交动作。
+56 秒演示视频包含约 26 秒真实 Chrome 自动控制录屏，其余画面由同一次运行的 JSON、商品图片和配置生成。演示没有进入最终提交动作。
 
 ## 系统如何工作
 
@@ -228,13 +226,6 @@ data/
     └── RUN_REPORT.md                   # 人类可读汇总
 ```
 
-生成可追加到 Lark 的一小时报告 XML：
-
-```bash
-node scripts/export-one-hour-lark.mjs \
-  --input data/runs/<run-id>/ONE_HOUR_RUN.json
-```
-
 报告中的“报价依据”是结构化、可核验的决策说明，不是也不声称暴露模型内部隐藏思维链。
 
 ## 仓库结构
@@ -247,7 +238,6 @@ plugins/alibaba-rfq-midscene/             # 收敛后的 Midscene MCP/CLI 插件
 .agents/skills/alibaba-rfq-agent/         # 本项目的 Codex 操作 Skill
 .agents/skills/midscene-control-chrome/   # 可复用的通用 Chrome Bridge Skill
 scripts/run-one-hour-audit.mjs            # 有界长期运行与逐 Case 证据记录
-scripts/export-one-hour-lark.mjs           # Lark 报告生成器
 tests/                                    # 分类、定价、门禁、插件与审计测试
 skill-packages/                           # 可单独分发的 .skill 包
 ```
