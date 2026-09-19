@@ -1,0 +1,4 @@
+interface:
+  display_name: "Midscene Chrome Control"
+  short_description: "Control Chrome through Midscene Bridge"
+  default_prompt: "Use $midscene-control-chrome to inspect and control my current Chrome page safely."

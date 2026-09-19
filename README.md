@@ -34,11 +34,17 @@ npm run doctor
 
 ### 仓库自带的 Codex Skill
 
-项目级 Skill 位于 `.agents/skills/alibaba-rfq-agent/SKILL.md`。Codex 在这个仓库中工作时会自动发现它；GitHub 用户只需克隆完整仓库并从仓库目录打开 Codex，不需要安装作者机器上的 `midscene-control-chrome` Skill。需要单独分发时，也可以使用 `skill-packages/alibaba-rfq-agent.skill`。
+项目级 Skill 位于 `.agents/skills/alibaba-rfq-agent/SKILL.md`。Codex 在这个仓库中工作时会自动发现它；GitHub 用户只需克隆完整仓库并从仓库目录打开 Codex。需要单独分发时，也可以使用 `skill-packages/alibaba-rfq-agent.skill`。
 
-这个 Skill 调用仓库自己的 `npm run midscene:*` 命令，并通过项目依赖 `@midscene/web` 连接用户已经登录的 Chrome。它不会创建第二个 Chrome Profile，也不依赖作者机器上的绝对路径。
+这个 Skill 调用仓库自己的 `npm run midscene:*` 命令，并通过项目依赖 `@midscene/web` 连接用户已经登录的 Chrome。它不会创建第二个 Chrome Profile，也不依赖任何机器特定的绝对路径。
 
 仓库还保留 `plugins/alibaba-rfq-midscene/`，用于需要 MCP 工具界面的 Codex 插件场景；其中也包含对应的插件 Skill。直接克隆运行时，以项目级 Skill 为入口即可。
+
+### 通用 Midscene Chrome 控制 Skill
+
+`.agents/skills/midscene-control-chrome/` 保存了一份独立、可移植的 Midscene Chrome Bridge Skill，用于展示如何从 Agent 指令连接到原子化浏览器操作、AI 辅助操作、标签页复用和文件上传。Codex 在仓库中可以发现并按需使用它；RFQ Agent 的 Node.js 运行代码不直接导入或调用这个 Skill，两者保持解耦。
+
+这个 Skill 中不包含 `node_modules/`、本机密钥、运行日志、HTML 报告或浏览器截图。若要直接执行它自带的脚本，进入该目录执行 `npm ci`，并按其中的 `.env.example` 配置模型供应商；Chrome 仍需安装并启用 Midscene Chrome Bridge 扩展。
 
 `.env.example` 使用 `LOCAL_CLAUDE_EXECUTABLE=claude`，程序会从当前 `PATH` 自动解析可执行文件，也兼容 `~/.local/bin/claude`、Homebrew 和 `/usr/local/bin` 的常见安装位置。浏览器登录状态始终留在用户现有 Chrome 中，不复制进项目；真实密钥、买家 RFQ、报价草稿、截图和运行报告只保存在本机，并由 `.gitignore` 排除。
 

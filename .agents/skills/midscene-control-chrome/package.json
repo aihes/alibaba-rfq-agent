@@ -1,0 +1,25 @@
+{
+  "name": "midscene-control-chrome-skill",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Self-contained Midscene.js Chrome Bridge scripts for the midscene-control-chrome skill.",
+  "type": "module",
+  "scripts": {
+    "bridge": "./scripts/run-bridge.sh",
+    "bridge:version": "./scripts/run-bridge.sh version",
+    "bridge:connect": "./scripts/run-bridge.sh connect",
+    "bridge:ask": "./scripts/bridge-ai.sh ask",
+    "bridge:act": "./scripts/bridge-ai.sh act",
+    "bridge:atomic": "./scripts/bridge-atomic.sh",
+    "bridge:upload": "./scripts/bridge-upload.sh",
+    "mcp": "./scripts/run-mcp.sh",
+    "help": "npx -y @midscene/web@1 --help"
+  },
+  "devDependencies": {
+    "@midscene/cli": "^1.9.7",
+    "@midscene/web": "^1.9.7",
+    "@midscene/web-bridge-mcp": "^1.9.7",
+    "tsx": "^4.20.6",
+    "typescript": "^6.0.3"
+  }
+}
