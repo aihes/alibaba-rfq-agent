@@ -255,7 +255,6 @@ plugins/alibaba-rfq-midscene/             # 收敛后的 Midscene MCP/CLI 插件
 .agents/skills/midscene-control-chrome/   # 可复用的通用 Chrome Bridge Skill
 scripts/run-one-hour-audit.mjs            # 有界长期运行与逐 Case 证据记录
 tests/                                    # 分类、定价、门禁、插件与审计测试
-skill-packages/                           # 可单独分发的 .skill 包
 ```
 
 `alibaba-rfq-agent` Skill 面向本项目的 RFQ 流程。`midscene-control-chrome` 是仓库内可发现的通用浏览器控制 Skill，可用于理解标签页复用、原子操作、AI 辅助操作和文件上传原理；RFQ 的 Node.js 代码不直接导入它。
