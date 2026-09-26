@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>CASE 档案 · Alibaba RFQ</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="workspace">
+      <aside class="rail" aria-label="数据集与 Agent">
+        <div class="brand"><span class="brand-mark" aria-hidden="true">A<span>·</span></span><div><strong>RFQ ARCHIVE</strong><small>报价数据集档案</small></div></div>
+        <div class="rail-rule"></div>
+        <p class="rail-label">工作区</p>
+        <nav class="workspace-nav" aria-label="工作区">
+          <button type="button" data-view="cases" class="active">数据集管理 <span>01</span></button>
+          <button type="button" data-view="console">报价 Agent <span>02</span></button>
+        </nav>
+        <div id="case-navigation">
+        <p class="rail-label">浏览范围</p>
+        <nav class="source-nav" id="source-nav" aria-label="按来源筛选"></nav>
+        </div>
+        <div class="rail-note">
+          <span class="note-symbol">↗</span>
+          <p>每条数据集都保留当时的买家需求、报价过程与依据，供 Agent 后续学习。</p>
+        </div>
+        <div class="rail-footer"><span class="live-dot"></span>仅在本机运行<br><small>原始文件保留于 data/</small></div>
+      </aside>
+
+      <main class="main">
+        <header class="masthead">
+          <div class="masthead-top"><span class="eyebrow">RESEARCH DESK / QUOTE DATASET</span><span class="edition">LOCAL EDITION <span id="edition-date">—</span></span></div>
+          <div class="title-row"><div><h1>报价<span>数据集</span></h1><p class="intro">真实报价记录：当时的买家需求、报价过程与决策边界，沉淀为 Agent 的学习语料。</p></div><div class="index-stamp"><span>INDEX</span><strong id="case-total">—</strong><small>cases</small></div></div>
+        </header>
+
+        <div id="case-workspace">
+        <section class="metrics" id="metrics" aria-label="数据概览"></section>
+
+        <section class="browser" aria-label="案例浏览器">
+          <div class="section-heading"><div><span class="section-index">01 / EXPLORE</span><h2>案例检索</h2></div><p id="result-count">载入中…</p></div>
+          <div class="filters">
+            <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="搜索商品、买家、规格或 CASE ID" autocomplete="off" aria-label="搜索案例" /><kbd>/</kbd></label>
+            <label class="select-wrap"><span>品类</span><select id="category" aria-label="按品类筛选"><option value="all">全部品类</option></select></label>
+            <label class="check"><input id="priced" type="checkbox" /><span>仅看有价格</span></label>
+          </div>
+          <div class="browser-grid">
+            <div class="case-list" id="case-list" role="list" aria-label="案例列表"></div>
+            <article class="case-detail" id="case-detail" aria-live="polite"><div class="loading">正在读取 CASE 数据…</div></article>
+          </div>
+        </section>
+        </div>
+        <section class="console" id="console-workspace" hidden aria-label="报价 Agent">
+          <div class="section-heading"><div><span class="section-index">02 / AGENT</span><h2>报价 Agent</h2></div><p>本机任务 · 单任务运行</p></div>
+          <div class="console-intro"><strong>检测、扫描、报价分级控制。</strong><span>先确认环境就绪，再按模式扫描 RFQ：仅产出报价话术，或经人工逐单确认后操作浏览器报价。</span></div>
+          <div class="ops-alert" id="ops-alert" hidden role="alert"></div>
+          <div class="agent-grid">
+            <div class="agent-card">
+              <div class="ops-heading"><span>01 / ENV</span><h3>环境检测</h3></div>
+              <div id="env-checks" class="env-checks"><p class="ops-help">尚未检测；进入本页会自动检测一次。</p></div>
+              <div class="env-actions"><button type="button" id="env-recheck" class="light">重新检测</button><small id="env-time">—</small></div>
+              <label class="toggle-row spaced"><span><strong>允许 Agent 控制浏览器</strong><small>关闭时禁止连接 Chrome Bridge，也无法扫描；运行中关闭会停止任务。</small></span><input id="browser-enabled" type="checkbox" role="switch" /></label>
+            </div>
+            <div class="agent-card">
+              <div class="ops-heading"><span>02 / SCAN</span><h3>RFQ 扫描</h3></div>
+              <div class="ops-fields">
+                <label>监控品类<select id="ops-term"></select></label>
+                <label>每轮新 RFQ 上限<select id="ops-limit"><option value="1">1 条</option><option value="2">2 条</option><option value="3">3 条</option></select></label>
+              </div>
+              <p class="ops-help">「只扫描」仅发现新需求；「运行一轮分析」对照规则生成报价草稿；「持续监控」按配置轮询自动执行。</p>
+              <div class="ops-actions">
+                <button type="button" data-action="scan" class="light">只扫描 RFQ</button>
+                <button type="button" data-action="once" class="primary">运行一轮分析</button>
+                <button type="button" data-action="watch" class="light">持续监控</button>
+              </div>
+              <div class="ops-bottom"><button type="button" data-action="refresh" class="text-button">重新整理数据集 ↗</button><span>不连接浏览器</span></div>
+            </div>
+            <div class="agent-card">
+              <div class="ops-heading"><span>03 / MODE</span><h3>报价模式</h3></div>
+              <div class="mode-list" role="radiogroup" aria-label="报价模式">
+                <button type="button" class="mode-option" data-mode="draft" role="radio" aria-checked="false">
+                  <strong>仅生成报价话术</strong><small>分析需求并产出报价话术、草稿；Agent 不操作报价表单。</small>
+                </button>
+                <button type="button" class="mode-option" data-mode="auto" role="radio" aria-checked="false">
+                  <strong>浏览器自动报价</strong><small>自动回填表单并截图；正式提交仍需逐单核对并输入完整 RFQ ID 确认。</small>
+                </button>
+              </div>
+              <p class="ops-help" id="mode-help">当前模式：仅生成报价话术。</p>
+              <div class="mode-note"><span>切换到自动报价会同时开启浏览器控制；重启服务后自动回落到话术模式。</span></div>
+            </div>
+          </div>
+          <div class="monitor-card">
+            <div class="ops-heading"><span>04 / MONITOR</span><h3>任务状态</h3><label class="mini-toggle"><input id="alerts-enabled" type="checkbox" role="switch" checked /><span>异常提醒</span></label></div>
+            <div class="run-status"><span class="status-dot" id="run-dot"></span><strong id="run-status">读取中…</strong><span id="run-time">—</span></div>
+            <div class="run-facts" id="run-facts"></div>
+            <div class="run-tools"><span id="run-id">尚无运行记录</span><button type="button" id="stop-run" class="stop-button" disabled>停止当前任务</button></div>
+            <div class="log-header"><strong>实时日志</strong><small>仅显示最近约 20 KB · 本机留存</small></div>
+            <pre class="run-log" id="run-log">尚无运行日志。</pre>
+          </div>
+          <div class="quote-workbench">
+            <div class="section-heading"><div><span class="section-index">05 / QUOTE</span><h2>浏览器报价</h2></div><p id="quote-count">读取草稿中…</p></div>
+            <div class="quote-workbench-grid">
+              <div class="quote-picker"><div class="list-head"><span>RFQ 草稿</span><span>价格状态</span></div><div id="quote-list" class="quote-list"></div></div>
+              <div class="quote-detail" id="quote-detail"><div class="empty">选择一条草稿，核对报价内容。</div></div>
+            </div>
+          </div>
+        </section>
+        <footer class="page-footer"><span>RFQ / QUOTE DATASET</span><span>Agent 已验证提交 <strong id="submitted-count">—</strong> 条。客户报价单 ≠ 已发送；系统条件报价 ≠ 成交。</span></footer>
+      </main>
+    </div>
+  </body>
+</html>
