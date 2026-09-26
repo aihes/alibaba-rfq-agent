@@ -1,6 +1,8 @@
 # Dependencies and package-manager caches
 node_modules/
 **/node_modules/
+__pycache__/
+*.pyc
 .npm/
 .pnpm-store/
 
