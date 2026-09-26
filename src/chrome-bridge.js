@@ -228,8 +228,15 @@ export async function connectChromeBridge({ timeoutMs = 20000 } = {}) {
 
   try {
     const tabs = await withBridgeLogsOnStderr(() => agent.getBrowserTabList());
-    const selected = tabs.find((tab) => /sourcing\.alibaba\.com\/rfq_search_list\.htm/i.test(tab.url))
+    let selected = tabs.find((tab) => /sourcing\.alibaba\.com\/rfq_search_list\.htm/i.test(tab.url))
       || tabs.find((tab) => /(?:sourcing|rfqposting)\.alibaba\.com/i.test(tab.url));
+    if (!selected) {
+      const fallbackUrl = "https://sourcing.alibaba.com/rfq_search_list.htm";
+      await withBridgeLogsOnStderr(() => agent.connectNewTabWithUrl(fallbackUrl));
+      const refreshed = await withBridgeLogsOnStderr(() => agent.getBrowserTabList());
+      selected = refreshed.find((tab) => /(?:sourcing|rfqposting)\.alibaba\.com/i.test(tab.url))
+        || refreshed.find((tab) => tab.currentActiveTab);
+    }
     if (!selected) throw new Error("No Alibaba RFQ tab is open in the existing Chrome session");
     await agent.setActiveTabId(selected.id);
     const page = new BridgePage(agent, selected.url);
