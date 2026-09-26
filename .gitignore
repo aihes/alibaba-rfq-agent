@@ -42,10 +42,6 @@ config/*.local.json
 config/local*.json
 plugins/**/.mcp.local.json
 
-# The Remotion demo currently has its own Git history and private run assets.
-# Keep it out of the main repository until it is intentionally flattened or
-# published as a separate repository.
-demo-video/
 
 # Editor and operating-system files
 .DS_Store
