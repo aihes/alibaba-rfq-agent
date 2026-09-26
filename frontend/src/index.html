@@ -32,7 +32,7 @@
       <main class="main">
         <header class="masthead">
           <div class="masthead-top"><span class="eyebrow">RESEARCH DESK / QUOTE DATASET</span><span class="edition">LOCAL EDITION <span id="edition-date">—</span></span></div>
-          <div class="title-row"><div><h1>报价<span>数据集</span></h1><p class="intro">真实报价记录：当时的买家需求、报价过程与决策边界，沉淀为 Agent 的学习语料。</p></div><div class="index-stamp"><span>INDEX</span><strong id="case-total">—</strong><small>cases</small></div></div>
+          <div class="title-row"><div><h1>报价<span>数据集</span></h1><p class="intro">真实需求与报价样例：保留买家需求、报价过程与决策边界，为后续案例检索与学习准备语料。</p></div><div class="index-stamp"><span>INDEX</span><strong id="case-total">—</strong><small>cases</small></div></div>
         </header>
 
         <div id="case-workspace">
@@ -58,7 +58,7 @@
           <div class="agent-grid">
             <div class="agent-card">
               <div class="ops-heading"><span>01 / ENV</span><h3>环境检测</h3></div>
-              <div id="env-checks" class="env-checks"><p class="ops-help">尚未检测；进入本页会自动检测一次。</p></div>
+              <div id="env-checks" class="env-checks"><p class="ops-help">进入本页自动检查本地环境；浏览器开关开启且无运行任务时才检测连接。</p></div>
               <div class="env-actions"><button type="button" id="env-recheck" class="light">重新检测</button><small id="env-time">—</small></div>
               <label class="toggle-row spaced"><span><strong>允许 Agent 控制浏览器</strong><small>关闭时禁止连接 Chrome Bridge，也无法扫描；运行中关闭会停止任务。</small></span><input id="browser-enabled" type="checkbox" role="switch" /></label>
             </div>
@@ -83,14 +83,15 @@
                   <strong>仅生成报价话术</strong><small>分析需求并产出报价话术、草稿；Agent 不操作报价表单。</small>
                 </button>
                 <button type="button" class="mode-option" data-mode="auto" role="radio" aria-checked="false">
-                  <strong>浏览器自动报价</strong><small>自动回填表单并截图；正式提交仍需逐单核对并输入完整 RFQ ID 确认。</small>
+                  <strong>逐单浏览器报价</strong><small>开启下方工作台；选择草稿并确认后回填、截图。正式提交另需逐单核对并输入完整 RFQ ID。</small>
                 </button>
               </div>
               <p class="ops-help" id="mode-help">当前模式：仅生成报价话术。</p>
-              <div class="mode-note"><span>切换到自动报价会同时开启浏览器控制；重启服务后自动回落到话术模式。</span></div>
+              <div class="mode-note"><span>开启逐单报价会同时开启浏览器控制；扫描和监控仍只生成草稿。重启服务后回落到话术模式。</span></div>
             </div>
           </div>
-          <div class="monitor-card">
+          <!-- 稳定的交互入口；monitor-card 仅负责样式，布局调整时可改名。 -->
+          <div class="monitor-card" id="ops-monitor">
             <div class="ops-heading"><span>04 / MONITOR</span><h3>任务状态</h3><label class="mini-toggle"><input id="alerts-enabled" type="checkbox" role="switch" checked /><span>异常提醒</span></label></div>
             <div class="run-status"><span class="status-dot" id="run-dot"></span><strong id="run-status">读取中…</strong><span id="run-time">—</span></div>
             <div class="run-facts" id="run-facts"></div>

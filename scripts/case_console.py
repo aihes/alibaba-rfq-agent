@@ -66,10 +66,17 @@ class OperatorConsole:
             except (OSError, ValueError):
                 pass
         self._env_cache = None
+        # status 也会连接 Bridge、切换标签页，必须像扫描/报价一样独占浏览器。
+        # 单独保存检测进程，使 HTTP 检测等待期间仍能处理“关闭浏览器”请求。
+        self._env_process = None
+        self._env_generation = 0
 
     def env_check(self, force=False):
-        if not force and self._env_cache and (datetime.now(timezone.utc) - self._env_cache[0]).total_seconds() < ENV_CHECK_TTL_SECONDS:
-            return self._env_cache[1]
+        """检查本地依赖；只有授权且浏览器空闲时才实际探测 Bridge。
+
+        force 仅绕过结果缓存，不能绕过总开关、任务互斥或检测互斥。
+        检测的长等待放在锁外，避免 30 秒超时阻塞关闭开关和停止任务。
+        """
         node = shutil.which("node")
         cli = self.root / "plugins/alibaba-rfq-midscene/scripts/cli.mjs"
         checks = [
@@ -79,15 +86,66 @@ class OperatorConsole:
             {"key": "login", "ok": False, "label": "Alibaba 登录态", "detail": "未检测"},
         ]
         by_key = {item["key"]: item for item in checks}
-        if node and cli.exists():
+
+        def report(status="checked", reason=None):
+            if reason:
+                for key in ("bridge", "login"):
+                    by_key[key].update(ok=False, detail=reason)
+            return {"ok": all(item["ok"] for item in checks), "checks": checks,
+                    "checkedAt": now(), "status": status}
+
+        with self.lock:
+            # 必须先判断授权和任务状态，再读缓存：旧的“已连接”结果不能
+            # 在关闭开关后继续显示，也不能鼓励用户在运行中重新连接 Bridge。
+            if not self.settings["browserEnabled"]:
+                return report("skipped", "浏览器控制已关闭；开启后才检测连接和登录态")
+            if self.current is not None:
+                return report("skipped", "任务正在运行；为避免抢占浏览器，完成后再检测")
+            if self._env_process is not None:
+                return report("skipped", "环境检测正在进行；请稍后刷新检测结果")
+            if not force and self._env_cache and (datetime.now(timezone.utc) - self._env_cache[0]).total_seconds() < ENV_CHECK_TTL_SECONDS:
+                return self._env_cache[1]
+            if not node or not cli.exists():
+                return report()
             try:
-                result = subprocess.run([node, str(cli), "status"], cwd=self.root, capture_output=True,
-                                        text=True, timeout=ENV_CHECK_TIMEOUT_SECONDS, check=False)
-                stdout = result.stdout or ""
+                # 创建进程与登记占用在同一把锁内完成，避免另一个 HTTP 请求
+                # 在两者之间启动扫描。独立进程组可在关闭/超时时完整终止。
+                process = self.popen([node, str(cli), "status"], cwd=self.root,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     text=True, start_new_session=True,
+                                     env={**os.environ, "AUTO_CONTACT_MODE": "off", "ALLOW_LIVE_SUBMIT": "false"})
+            except OSError:
+                return report("checked", "无法启动检测；请检查本机 Node 和插件")
+            self._env_process = process
+            generation = self._env_generation
+
+        payload = None
+        try:
+            try:
+                stdout, _stderr = process.communicate(timeout=ENV_CHECK_TIMEOUT_SECONDS)
+                stdout = stdout or ""
                 start = stdout.find("{")
                 payload = json.loads(stdout[start:]) if start >= 0 else None
-            except (OSError, subprocess.TimeoutExpired, ValueError):
-                payload = None
+            except subprocess.TimeoutExpired:
+                with self.lock:
+                    self._terminate_env_locked()
+                # kill 后回收进程和管道，不留下会继续连接浏览器的后台检测。
+                process.communicate()
+            except (OSError, ValueError):
+                pass
+        except BaseException:
+            with self.lock:
+                self._terminate_env_locked()
+                self._env_process = None
+            process.wait()
+            raise
+
+        with self.lock:
+            # 释放占用与保存结果在同一个临界区完成，防止新任务在两者
+            # 之间启动。generation 也识别检测期间“关闭后重新开启”。
+            self._env_process = None
+            if not self.settings["browserEnabled"] or generation != self._env_generation:
+                return report("skipped", "浏览器授权已变化；本次检测已取消，请重新检测")
             if not isinstance(payload, dict):
                 by_key["bridge"]["detail"] = "检测超时或无输出；请确认 Chrome 已启动并启用 Midscene 扩展"
             elif payload.get("connected"):
@@ -96,9 +154,17 @@ class OperatorConsole:
                                        detail="已登录 sourcing.alibaba.com" if payload.get("loggedIn") else "未登录；需人工在 Chrome 中完成登录")
             else:
                 by_key["bridge"]["detail"] = "未连接；请在 Chrome 中启用 Midscene 扩展并开启 Bridge"
-        report = {"ok": all(item["ok"] for item in checks), "checks": checks, "checkedAt": now()}
-        self._env_cache = (datetime.now(timezone.utc), report)
-        return report
+            result = report()
+            self._env_cache = (datetime.now(timezone.utc), result)
+            return result
+
+    def _terminate_env_locked(self):
+        """只终止本控制台创建的检测进程组；不影响用户 Chrome 进程。"""
+        if self._env_process is not None:
+            try:
+                os.killpg(self._env_process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
     def _tail(self, run):
         if not run:
@@ -116,8 +182,9 @@ class OperatorConsole:
         with self.lock:
             run = dict(self.current or self.last_run or {})
             settings = dict(self.settings)
+            env_checking = self._env_process is not None
         return {"settings": settings, "searchTerms": SEARCH_TERMS, "run": run or None,
-                "log": self._tail(run), "serverTime": now()}
+                "log": self._tail(run), "serverTime": now(), "envChecking": env_checking}
 
     def update_settings(self, changes):
         if not isinstance(changes, dict) or not changes or any(key not in self.settings or type(value) is not bool for key, value in changes.items()):
@@ -125,9 +192,14 @@ class OperatorConsole:
         with self.lock:
             if changes.get("quoteEnabled") and not changes.get("browserEnabled", self.settings["browserEnabled"]):
                 raise ConsoleError("请先开启浏览器操作")
+            if "browserEnabled" in changes:
+                self._env_cache = None
+                if changes["browserEnabled"] != self.settings["browserEnabled"]:
+                    self._env_generation += 1
             self.settings.update(changes)
             if not self.settings["browserEnabled"]:
                 self.settings["quoteEnabled"] = False
+                self._terminate_env_locked()
             atomic_json(self.settings_file, self.settings)
             stop_browser = not self.settings["browserEnabled"] and self.current and self.current["kind"] != "refresh"
             stop_quote = not self.settings["quoteEnabled"] and self.current and self.current["kind"] in {"quote_fill", "quote_submit"}
@@ -169,6 +241,8 @@ class OperatorConsole:
         with self.lock:
             if self.current is not None:
                 raise ConsoleError("已有任务正在运行，请先停止")
+            if self._env_process is not None:
+                raise ConsoleError("环境检测正在进行，请等待检测完成")
             if not self.settings["browserEnabled"] or not self.settings["quoteEnabled"]:
                 raise ConsoleError("请先开启浏览器操作和浏览器报价")
             review = self.review_quote(draft_id)
@@ -218,8 +292,9 @@ class OperatorConsole:
         cli = str(self.root / "plugins/alibaba-rfq-midscene/scripts/cli.mjs")
         if kind == "scan":
             if term == ALL_TERMS:
-                script = "; ".join(f'"{node}" "{cli}" scan --term "{item}" --max 10' for item in SEARCH_TERMS)
-                return ["/bin/sh", "-c", script]
+                # 用参数数组交给 Node 顺序执行，不经过 shell。任一品类失败
+                # 就保留该退出码并停止，不能让后续成功覆盖验证码/登录失败。
+                return [node, str(self.root / "scripts/scan_all_terms.mjs")]
             return [node, cli, "scan", "--term", term, "--max", "10"]
         if kind in ("once", "watch"):
             return [node, str(self.root / "src/cli.js"), kind]
@@ -240,6 +315,8 @@ class OperatorConsole:
         with self.lock:
             if self.current is not None:
                 raise ConsoleError("已有任务正在运行，请先停止")
+            if self._env_process is not None:
+                raise ConsoleError("环境检测正在进行，请等待检测完成")
             if kind != "refresh" and not self.settings["browserEnabled"]:
                 raise ConsoleError("请先开启浏览器操作")
             command = self._command(kind, term, limit)
@@ -248,10 +325,13 @@ class OperatorConsole:
                    "finishedAt": None, "exitCode": None, "alert": None}
             self.ops_dir.mkdir(parents=True, exist_ok=True)
             environment = os.environ.copy()
+            # quoteEnabled 只授权逐单工作台；扫描/分析/监控始终产出草稿，
+            # 不能通过模式切换或继承的 .env 自动回填/发送未来的 RFQ。
             environment.update({"AUTO_CONTACT_MODE": "off", "ALLOW_LIVE_SUBMIT": "false", "AUTO_CONTACT_ACK": "",
                                 "MAX_NEW_RFQS_PER_CYCLE": str(limit), "MAX_CARDS_PER_SEARCH": "10"})
-            if term != ALL_TERMS:
-                environment["SEARCH_TERMS"] = term
+            # 显式覆盖“全部”也很必要：删除 shell 变量还会让 dotenv 重新
+            # 注入 .env 中的子集。这里用配置的完整列表覆盖这两种来源。
+            environment["SEARCH_TERMS"] = ",".join(SEARCH_TERMS) if term == ALL_TERMS else term
             log_file = (self.ops_dir / f"{run['id']}.log").open("wb")
             try:
                 process = self.popen(command, cwd=self.root, env=environment, stdout=log_file,
@@ -339,5 +419,7 @@ class OperatorConsole:
 
     def close(self):
         with self.lock:
+            self._env_generation += 1
+            self._terminate_env_locked()
             if self.process and self.current and self.current["status"] != "indexing":
                 self._stop_locked()

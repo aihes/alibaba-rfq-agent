@@ -1,4 +1,4 @@
-const state = { catalog: null, source: 'priced', category: 'all', query: '', priced: false, selected: null, tab: 'summary', view: 'cases', ops: null, opsFlash: '', lastFinishedRun: null, quotes: null, quoteSelected: null, quoteDetail: null, quoteReview: null };
+const state = { catalog: null, source: 'priced', category: 'all', query: '', priced: false, selected: null, tab: 'summary', view: 'cases', ops: null, opsFlash: '', envLoading: false, lastFinishedRun: null, quotes: null, quoteSelected: null, quoteDetail: null, quoteReview: null };
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const fmt = (value, maximumFractionDigits = 3) => value == null ? '—' : new Intl.NumberFormat('en-US', { maximumFractionDigits }).format(value);
@@ -174,21 +174,31 @@ function renderDetail() {
 const runNames = { refresh: '重新整理数据集', scan: '扫描 RFQ', once: '运行一轮分析', watch: '持续监控', quote_fill: '浏览器回填报价', quote_submit: '向买家提交报价' };
 const statusNames = { running: '运行中', stopping: '正在停止', indexing: '正在更新数据集', completed: '已完成', stopped: '已停止', failed: '运行失败', attention: '需要人工处理', interrupted: '服务重启后状态未确认' };
 const termLabel = (term) => term === '__all__' ? '全部品类' : term;
-const modeHelp = { draft: '当前模式：仅生成报价话术，Agent 不操作报价表单。', auto: '当前模式：浏览器自动报价；回填后仍需逐单确认才会提交。' };
+// 保留历史 data-mode="auto" 作为内部键，界面准确表达它只开放逐单操作。
+// 扫描/监控的服务端环境始终禁用自动联系，切换模式不会发送未来的草稿。
+const modeHelp = { draft: '当前模式：仅生成报价话术，Agent 不操作报价表单。', auto: '当前模式：逐单浏览器报价。请在下方选择草稿，确认后回填，再逐单确认提交；扫描和监控仍只生成草稿。' };
 const currentMode = (settings) => settings.quoteEnabled ? 'auto' : 'draft';
 
 async function loadEnv(force = false) {
+  // 避免切换页面/连续点击同时触发检测；服务端仍负责真正的浏览器互斥。
+  if (state.envLoading) return;
+  state.envLoading = true;
+  renderOps();
   const box = $('#env-checks');
   box.innerHTML = '<p class="ops-help">正在检测运行环境…（最长约 30 秒）</p>';
   try {
     const response = await fetch(`/api/env/check${force ? '?force=1' : ''}`);
     const value = await response.json();
     if (!response.ok) throw new Error(value.error || `HTTP ${response.status}`);
-    box.innerHTML = value.checks.map((check) => `<div class="env-row ${check.ok ? 'ok' : 'bad'}"><span class="env-dot" aria-hidden="true"></span><div><strong>${esc(check.label)}</strong><small>${esc(check.detail)}</small></div></div>`).join('');
+    // 主动跳过连接不代表故障，用灰色区分“未检测”和真正的依赖错误。
+    box.innerHTML = value.checks.map((check) => `<div class="env-row ${check.ok ? 'ok' : value.status === 'skipped' && ['bridge', 'login'].includes(check.key) ? 'skipped' : 'bad'}"><span class="env-dot" aria-hidden="true"></span><div><strong>${esc(check.label)}</strong><small>${esc(check.detail)}</small></div></div>`).join('');
     $('#env-time').textContent = value.checkedAt ? `检测于 ${new Date(value.checkedAt).toLocaleString('zh-CN')}` : '—';
   } catch (error) {
     box.innerHTML = `<p class="ops-help">环境检测失败：${esc(error.message)}</p>`;
     $('#env-time').textContent = '—';
+  } finally {
+    state.envLoading = false;
+    await updateOps();
   }
 }
 
@@ -226,8 +236,10 @@ function renderOps() {
   });
   $('#mode-help').textContent = modeHelp[mode];
   const active = run && ['running', 'stopping', 'indexing'].includes(run.status);
+  const envBusy = state.envLoading || data.envChecking;
+  $('#env-recheck').disabled = !!active || !!envBusy;
   document.querySelectorAll('[data-action]').forEach((button) => {
-    button.disabled = !!active || (button.dataset.action !== 'refresh' && !data.settings.browserEnabled);
+    button.disabled = !!active || !!envBusy || (button.dataset.action !== 'refresh' && !data.settings.browserEnabled);
   });
   $('#stop-run').disabled = !active || run.status !== 'running';
   $('#run-dot').className = `status-dot ${run?.status || 'idle'}`;
@@ -308,7 +320,7 @@ async function loadQuoteDetail() {
 
 function renderQuoteButtons() {
   if (!state.quoteDetail) return;
-  const available = !!state.ops?.settings.browserEnabled && !!state.ops?.settings.quoteEnabled && !['running', 'stopping', 'indexing'].includes(state.ops?.run?.status);
+  const available = !!state.ops?.settings.browserEnabled && !!state.ops?.settings.quoteEnabled && !state.envLoading && !state.ops?.envChecking && !['running', 'stopping', 'indexing'].includes(state.ops?.run?.status);
   const fill = $('#quote-detail [data-quote-action="fill"]');
   const submit = $('#quote-detail [data-quote-action="submit"]');
   if (fill) fill.disabled = !available || !state.quoteDetail.fillEligible;
@@ -362,7 +374,9 @@ async function executeQuoteAction(kind) {
       confirmation: $('#quote-confirm-id').value.trim(), approved: $('#quote-approve').checked });
     state.quoteReview = null;
     renderOps(); renderQuoteDetail();
-    $('.ops-monitor').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // 使用稳定 ID，避免样式类随布局改名破坏操作。滚动只是展示步骤，
+    // 即使监控区以后被移除，也不能把已经成功启动的报价误报成失败。
+    $('#ops-monitor')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (error) {
     state.opsFlash = error.message;
     renderOps();
@@ -425,15 +439,22 @@ async function start() {
     document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => runAction(button.dataset.action)));
     $('#env-recheck').addEventListener('click', () => loadEnv(true));
     document.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', async () => {
+      // 这里只改变逐单工作台权限，不启动扫描，也不自动联系买家。
       const settings = button.dataset.mode === 'auto'
         ? { browserEnabled: true, quoteEnabled: true }
         : { quoteEnabled: false };
-      try { state.opsFlash = ''; state.ops = await opsRequest('/api/ops/settings', settings); renderOps(); }
+      try { state.opsFlash = ''; state.ops = await opsRequest('/api/ops/settings', settings); renderOps(); await loadEnv(true); }
       catch (error) { state.opsFlash = error.message; renderOps(); }
     }));
     for (const [key, id] of [['browserEnabled', '#browser-enabled'], ['alertsEnabled', '#alerts-enabled']]) {
       $(id).addEventListener('change', async (event) => {
-        try { state.opsFlash = ''; state.ops = await opsRequest('/api/ops/settings', { [key]: event.target.checked }); renderOps(); }
+        try {
+          state.opsFlash = '';
+          state.ops = await opsRequest('/api/ops/settings', { [key]: event.target.checked });
+          renderOps();
+          // 立即刷新授权状态；关闭时服务端仅返回本地检查，不连接 Chrome。
+          if (key === 'browserEnabled') await loadEnv(true);
+        }
         catch (error) { event.target.checked = !event.target.checked; state.opsFlash = error.message; renderOps(); }
       });
     }

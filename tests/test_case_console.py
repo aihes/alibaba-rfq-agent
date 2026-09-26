@@ -23,6 +23,17 @@ class ImmediateProcess:
 
 
 class ConsoleTest(unittest.TestCase):
+    def wait_for_completion(self, console):
+        # start() 会另起 watcher 写最后状态；先等它收尾，再删除临时目录。
+        # 否则 rmtree 与 atomic_json 并发写入会偶发报 Directory not empty。
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            run = console.snapshot()["run"]
+            if run and run["status"] not in {"running", "stopping", "indexing"}:
+                return run
+            time.sleep(0.01)
+        self.fail("task did not finish")
+
     def test_allowlist_and_safe_browser_environment(self):
         with tempfile.TemporaryDirectory() as temp:
             captured = {}
@@ -50,7 +61,7 @@ class ConsoleTest(unittest.TestCase):
                     break
                 time.sleep(0.02)
 
-    def test_scan_all_terms_runs_each_category_without_term_override(self):
+    def test_all_terms_overrides_inherited_search_terms(self):
         with tempfile.TemporaryDirectory() as temp:
             captured = {}
 
@@ -60,19 +71,31 @@ class ConsoleTest(unittest.TestCase):
 
             console = OperatorConsole(ops_dir=Path(temp), popen=fake_popen)
             console.update_settings({"browserEnabled": True})
-            console.start({"kind": "scan", "term": "__all__"})
-            self.assertEqual(captured["command"][:2], ["/bin/sh", "-c"])
-            script = captured["command"][2]
-            for term in case_console.SEARCH_TERMS:
-                self.assertIn(f'--term "{term}"', script)
-            self.assertNotIn("SEARCH_TERMS", captured["env"])
+            # 即使服务启动的 shell 限定了子集，页面“全部”仍必须覆盖它。
+            with mock.patch.dict(case_console.os.environ, {"SEARCH_TERMS": "cloth bag"}):
+                console.start({"kind": "scan", "term": "__all__"})
+            self.assertEqual(Path(captured["command"][1]).name, "scan_all_terms.mjs")
+            self.assertEqual(captured["env"]["SEARCH_TERMS"], ",".join(case_console.SEARCH_TERMS))
+            self.assertEqual(self.wait_for_completion(console)["status"], "completed")
+
+            # once/watch 共用同一个环境构造路径，也不能回退到 shell 子集。
+            # 不启动真实 Agent；只捕获 start() 交给进程的环境。
+            with mock.patch.object(case_console.threading, "Thread"), mock.patch.dict(
+                    case_console.os.environ, {"SEARCH_TERMS": "cloth bag"}):
+                for kind in ("once", "watch"):
+                    console.start({"kind": kind, "term": "__all__"})
+                    self.assertEqual(captured["env"]["SEARCH_TERMS"], ",".join(case_console.SEARCH_TERMS))
+                    self.assertEqual(captured["env"]["AUTO_CONTACT_MODE"], "off")
+                    console.current = console.process = None
 
     def test_env_check_parses_bridge_status(self):
         with tempfile.TemporaryDirectory() as temp:
             console = OperatorConsole(ops_dir=Path(temp))
-            fake = subprocess.CompletedProcess([], 0, stdout='{"connected": true, "loggedIn": true, "tabId": 42}\n')
-            with mock.patch.object(case_console.subprocess, "run", return_value=fake):
-                report = console.env_check()
+            console.update_settings({"browserEnabled": True})
+            process = mock.Mock(returncode=0)
+            process.communicate.return_value = ('{"connected": true, "loggedIn": true, "tabId": 42}\n', '')
+            console.popen = mock.Mock(return_value=process)
+            report = console.env_check()
             by_key = {item["key"]: item for item in report["checks"]}
             self.assertTrue(report["ok"])
             self.assertTrue(by_key["node"]["ok"])
@@ -82,17 +105,105 @@ class ConsoleTest(unittest.TestCase):
             self.assertTrue(by_key["login"]["ok"])
             cached = console.env_check()
             self.assertEqual(cached["checkedAt"], report["checkedAt"])
+            console.popen.assert_called_once()
+
+            # force 和成功缓存都不能绕过已关闭的浏览器授权。
+            console.update_settings({"browserEnabled": False})
+            self.assertEqual(console.env_check(force=True)["status"], "skipped")
+            self.assertFalse(console.env_check()["ok"])
+            console.popen.assert_called_once()
 
     def test_env_check_reports_disconnected_bridge(self):
         with tempfile.TemporaryDirectory() as temp:
             console = OperatorConsole(ops_dir=Path(temp))
-            fake = subprocess.CompletedProcess([], 1, stdout="")
-            with mock.patch.object(case_console.subprocess, "run", return_value=fake):
-                report = console.env_check()
+            console.update_settings({"browserEnabled": True})
+            process = mock.Mock(returncode=1)
+            process.communicate.return_value = ('', '')
+            console.popen = mock.Mock(return_value=process)
+            report = console.env_check()
             by_key = {item["key"]: item for item in report["checks"]}
             self.assertFalse(report["ok"])
             self.assertFalse(by_key["bridge"]["ok"])
             self.assertFalse(by_key["login"]["ok"])
+
+    def test_env_check_never_connects_when_disabled_or_task_is_running(self):
+        with tempfile.TemporaryDirectory() as temp:
+            console = OperatorConsole(ops_dir=Path(temp), popen=mock.Mock())
+            self.assertEqual(console.env_check(force=True)["status"], "skipped")
+            console.update_settings({"browserEnabled": True})
+            console.current = {"kind": "scan", "status": "running"}
+            self.assertEqual(console.env_check(force=True)["status"], "skipped")
+            console.popen.assert_not_called()
+
+    def test_env_check_owns_browser_until_probe_completes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            console = OperatorConsole(ops_dir=Path(temp))
+            console.update_settings({"browserEnabled": True, "quoteEnabled": True})
+
+            def communicate(**_kwargs):
+                self.assertTrue(console.snapshot()["envChecking"])
+                self.assertEqual(console.env_check(force=True)["status"], "skipped")
+                with self.assertRaisesRegex(ConsoleError, "环境检测正在进行"):
+                    console.start({"kind": "scan"})
+                with self.assertRaisesRegex(ConsoleError, "环境检测正在进行"):
+                    console.start_quote({"kind": "fill", "approved": True})
+                return ('{"connected":true,"loggedIn":true}', '')
+
+            process = mock.Mock(returncode=0)
+            process.communicate.side_effect = communicate
+            console.popen = mock.Mock(return_value=process)
+            self.assertTrue(console.env_check()["ok"])
+            self.assertFalse(console.snapshot()["envChecking"])
+            console.popen.assert_called_once()
+
+    def test_disabling_browser_cancels_live_probe_and_discards_result(self):
+        with tempfile.TemporaryDirectory() as temp:
+            started = threading.Event()
+            children = []
+
+            def fake_status(_command, **kwargs):
+                # 用休眠的本地 Python 子进程验证真实进程组终止，不碰 Chrome。
+                child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                         **{key: value for key, value in kwargs.items() if key != "env"})
+                children.append(child)
+                started.set()
+                return child
+
+            console = OperatorConsole(ops_dir=Path(temp), popen=fake_status)
+            console.update_settings({"browserEnabled": True})
+            result = {}
+            thread = threading.Thread(target=lambda: result.update(console.env_check()))
+            thread.start()
+            try:
+                self.assertTrue(started.wait(2))
+                self.assertTrue(console.snapshot()["envChecking"])
+                console.update_settings({"browserEnabled": False})
+                console.update_settings({"browserEnabled": True})
+                thread.join(2)
+                self.assertFalse(thread.is_alive())
+                self.assertLess(children[0].returncode, 0)
+                self.assertEqual(result["status"], "skipped")
+                self.assertIsNone(console._env_cache)
+            finally:
+                console.close()
+                thread.join(2)
+
+    def test_env_timeout_kills_and_reaps_owned_probe(self):
+        with tempfile.TemporaryDirectory() as temp:
+            children = []
+
+            def fake_status(_command, **kwargs):
+                child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+                children.append(child)
+                return child
+
+            console = OperatorConsole(ops_dir=Path(temp), popen=fake_status)
+            console.update_settings({"browserEnabled": True})
+            with mock.patch.object(case_console, "ENV_CHECK_TIMEOUT_SECONDS", 0.03):
+                report = console.env_check()
+            self.assertFalse(report["ok"])
+            self.assertLess(children[0].returncode, 0)
+            self.assertFalse(console.snapshot()["envChecking"])
 
     def test_disabling_browser_stops_owned_process(self):
         with tempfile.TemporaryDirectory() as temp:
