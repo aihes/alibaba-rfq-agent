@@ -311,6 +311,25 @@ class ConsoleTest(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
+    def test_notification_permission_and_actual_console_url_are_independent_of_browser(self):
+        with tempfile.TemporaryDirectory() as temp:
+            console = OperatorConsole(ops_dir=Path(temp))
+            with mock.patch.object(case_console.subprocess, "run") as run:
+                with self.assertRaisesRegex(ConsoleError, "开启机会系统通知"):
+                    console.test_notification()
+                run.assert_not_called()
+                console.update_settings({"notificationsEnabled": True})
+                console.notifications_url = "http://localhost:8889/"
+                run.return_value = mock.Mock(returncode=0, stdout='{"status":"accepted","detail":"fixture"}')
+                self.assertEqual(console.test_notification()["status"], "accepted")
+                environment = run.call_args.kwargs["env"]
+                self.assertEqual(environment["RFQ_CONSOLE_URL"], "http://localhost:8889/")
+                self.assertEqual(environment["RFQ_CONSOLE_SETTINGS_FILE"], str(console.settings_file.resolve()))
+                self.assertFalse(console.snapshot()["settings"]["browserEnabled"])
+                self.assertFalse(console.snapshot()["settings"]["quoteEnabled"])
+                restored = OperatorConsole(ops_dir=Path(temp))
+                self.assertTrue(restored.snapshot()["settings"]["notificationsEnabled"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,13 +2,68 @@
 
 > 复用用户已经登录的 Chrome，持续发现 Alibaba RFQ；由本地 Agent 理解需求，由确定性规则决定金额，并把浏览器事实、Agent 判断、报价依据和外部动作保存成可审计证据。
 
-**当前状态：**安全优先的 PoC，macOS 开箱路径已验证。默认只扫描、分析并保存草稿，真实提交关闭。
+**当前状态：**已有 Electron 桌面测试版（macOS Apple Silicon / Windows x64）；Mac 为 ad-hoc 本地签名、未公证，Windows 未签名且未实机验证。浏览器报价仍逐单确认，默认只生成草稿。原有 CLI 继续保留。
 
 - 浏览器：现有 Chrome + Midscene Chrome Bridge，不创建第二个 Chrome Profile。
-- 理解：Claude Agent SDK 调用本地 Claude Code；可继承用户自己的兼容网关和模型。
+- 理解：桌面版在页面配置模型 API，无需 Claude CLI；开发者可继续使用本地 Claude Agent SDK。
 - 定价：金额只来自版本化规则，Agent 不得自由猜价。
-- 图片：默认在本机用 macOS Vision OCR，原始像素不发送给模型。
+- 图片：使用 GLM OCR 云接口，RFQ 图片发送到所配置服务；无需本机编译，支持关闭 OCR。
 - 提交：只有页面成功状态得到验证且落盘状态为 `submitted`，才计为成功报价。
+
+## 普通用户：桌面应用
+
+Mac 打开 `dist/desktop/RFQ-Assistant-0.6.1-mac-arm64.dmg`；Windows 双击 `dist/desktop/RFQ-Assistant-0.6.1-win-x64.exe`，安装「RFQ助手」。首次进入应用设置填写模型与 GLM OCR 密钥，再按引导安装随附插件、登录 Alibaba。无需 Node、Python 或终端。
+
+关闭窗口继续后台运行；菜单「退出并停止任务」才退出。已有真实 CASE 可通过「导入已有数据」选择原项目 `data` 迁移，私人数据不会打进安装包。当前为本地测试版，对外分发前需完成正式签名与公证。详细步骤见 [桌面版说明](docs/DESKTOP.md)。
+
+## 开发者：Web 启动与关闭
+
+在项目目录打开终端，首次使用先运行 `npm install`；开发环境建议 Node.js 22.19+；默认服务已迁移到 Node，不需要 Python。
+
+以后每次只需运行：
+
+```bash
+npm start
+```
+
+看到「报价工作台已启动」后，在浏览器打开 **http://localhost:8888/**。先点「数据集管理」浏览真实 CASE；需要扫描时再进入「报价 Agent」，开启浏览器控制并检测环境。只浏览数据集不需要登录 Alibaba，扫描需要 Chrome 的 Midscene Bridge 和 Alibaba 登录态。报价操作仍需逐单确认。
+
+**关闭方法：**保持启动终端打开，使用结束后在该终端按 **Ctrl+C**。下次继续运行 `npm start`；`npm run cases:up` 也能启动。
+
+如果提示「端口 8888 已被占用」，可能已经启动过：先打开上述地址检查；需要重启时回原启动终端按 Ctrl+C 后再启动。服务不会自动换成难记的随机端口。高级用户可用 `npm run cases:serve -- --port 8889` 指定其他端口。
+
+### 首次使用：在本项目安装 Midscene 插件
+
+官方插件 ZIP 已随项目放在 [`vendor/midscene/`](vendor/midscene/README.md)，对应锁定的 SDK 发布版本 v1.12.9。`npm start` 会校验并解压到固定本地目录，无需另行下载插件。
+
+1. 打开 **报价 Agent → 首次使用：安装 Midscene 插件**，点击「复制插件目录」。
+2. 将 `chrome://extensions` 复制到 Chrome 地址栏打开，开启右上角「开发者模式」，点击「加载已解压的扩展程序」，选择刚才的目录。
+   Mac 选择文件夹时按 **⌘⇧G**，粘贴插件目录并回车，再点击「选择」。
+3. 在 Chrome 右上角拼图菜单固定并打开 **Midscene.js**，进入 **Bridge Mode**。
+4. 开启工作台「允许 Agent 控制浏览器」并重新检测，在插件询问连接时点击 **Allow**，确认 Alibaba 已登录。
+
+Chrome 最后一步加载扩展需手动操作；准备文件不会代替安装或开启浏览器控制。页面也提供官方 ZIP 下载和「准备安装文件」重试入口。安装后保留项目中的 `data/browser-extension/`，Chrome 会持续读取该目录。浏览数据集无需安装插件。
+
+### 日常办公与监听分开
+
+Agent 会切换并导航 Alibaba 标签页，因此不要把运行它的窗口同时用于日常办公。建议按以下方式使用：
+
+1. **日常浏览器**：继续办公，也可用它访问本机工作台。
+2. **专用 Chrome 配置**：由用户在 Chrome 头像菜单添加一个名为「RFQ 监听」的配置，在这个配置中安装 Midscene、登录 Alibaba 并开启 Bridge Mode。
+3. **只在专用配置开启 Bridge**：主配置和其他 Chrome 配置关闭 Bridge，避免多个插件实例抢同一个连接。仅在主配置多开一个标签页仍会被扫描切换。
+
+专用配置仍需要用户保持打开；程序不自动创建配置、不复制登录信息，也不启动隐藏浏览器。当前 Bridge 按连接实例中的窗口选择 Alibaba 标签页，并没有跨浏览器自动选择/隔离功能。
+
+### 发现机会时弹出系统通知
+
+在「报价 Agent → 报价模式」开启 **机会系统通知**，点击 **发送测试通知**，首次按 macOS 提示允许通知。通知组件随项目提供于 [`vendor/terminal-notifier/`](vendor/terminal-notifier/README.md)，发送时自动离线准备。
+
+- 桌面版使用应用原生通知，权限归 RFQ 助手（正式 macOS 包需签名）；Web/CLI 版当前支持 **macOS**。系统设置 → 通知 → **terminal-notifier** 中可设置横幅和声音；专注模式可能隐藏或延后通知。
+- 默认关闭。开启后，只提醒通过当前价格规则复核的非条件 `quoted` 新草稿；Agent 建议报价、置信度达标、无缺参/风险、仍有报价席位，且商品描述、核实交货地点、美元单价和总价完整、没有已有报价动作。通知供人工复核，正式报价仍需逐单确认。
+- 同一 RFQ 只尝试通知一次，重启不会重复轰炸。发送失败保留在 `data/case-catalog/ops/notification-status.json` 和 `notification-state.json`，通知失败不打断草稿保存。
+- **关闭工作台页面仍可通知**；需保持终端、专用 Chrome 和持续监控任务运行。退出服务会停止其任务。只扫描、历史数据整理或浏览 CASE 不发机会通知。
+- 点击通知打开本机工作台的对应草稿。回填和正式提交仍需逐单确认。
+- 可复用接口包括 `notifications.status`、`notifications.test`、`notifications.opportunity`，提供 JS、CLI 和本机 HTTP 入口，见 [通知工具说明](docs/NOTIFICATION-TOOLS.md)。
 
 ## 真实运行证据
 
@@ -89,7 +144,7 @@ RFQ 文本、图片和 OCR 内容一律视为不可信输入。二维码、外�
 - 已安装并启用的 Midscene Chrome Bridge 扩展
 - Chrome 中已有登录状态正常的 `sourcing.alibaba.com` 或 `rfqposting.alibaba.com` 标签页
 - 已安装并完成配置的 Claude Code
-- macOS（默认 OCR 使用 Vision；Linux/Windows 需要替换 OCR 适配层）
+- GLM OCR API Key（图片识别可关闭；无需本机 Vision 编译工具）
 
 ### 安装与自检
 
@@ -103,7 +158,7 @@ npm run doctor
 npm run midscene:status
 ```
 
-`doctor` 使用仓库内不含敏感信息的测试图片验证本地 Claude 与 OCR 链路。默认应返回：
+`doctor` 使用仓库内不含敏感信息的测试图片验证本地 Claude 与 OCR 链路。配置好 OCR Key 后应返回：
 
 - `fixtureMatched: true`
 - `method: local-ocr`
@@ -115,7 +170,7 @@ npm run midscene:status
 - `connected: true`
 - `loggedIn: true`
 
-默认无需把 API Key 写进项目。`AGENT_PROVIDER=local-claude-sdk` 会启动 `PATH` 中的 `claude`，并继承当前 shell 已有的网关、认证和模型配置。`LOCAL_CLAUDE_MODEL` 留空时继承本地默认模型。
+开发者使用本地 Claude 路径时无需把分析模型 API Key 写进项目。GLM OCR 需单独配置密钥，图片会发送到智谱。`AGENT_PROVIDER=local-claude-sdk` 会启动 `PATH` 中的 `claude`，并继承当前 shell 已有的网关、认证和模型配置。`LOCAL_CLAUDE_MODEL` 留空时继承本地默认模型。
 
 在任何表单回填前，必须在 `.env` 设置经过核实的 `QUOTE_PORT`：EXW 填工厂交货城市/地点，FOB 填装运港。程序不会猜这个值。
 
@@ -233,10 +288,11 @@ data/
 仓库中的真实 RFQ 草稿与 `data/reference-materials/` 人工报价表可以整理为统一 CASE。生成数据并启动只监听本机的页面（本地控制台服务本身是 Python 标准库实现，无需 pip 安装任何依赖）：
 
 ```bash
-npm run cases:up        # 生成数据集并启动页面（= cases:build + cases:serve）
+npm start              # 整理数据并启动，访问 http://localhost:8888/
+# npm run cases:up 也可以；按 Ctrl+C 关闭
 ```
 
-打开 `http://127.0.0.1:8765/`。**数据集管理**视图按来源、品类和价格筛选真实需求与报价样例，检索商品或 CASE ID，逐条查看当时的买家需求、报价过程、规格、规则判断、成本线索及原始工作簿。当前 201 个 CASE 中有 108 个客户报价单 CASE、189 行报价明细，另含 Agent 分析和工作材料；并非每个 CASE 都有真实报价。这些记录为后续案例检索与学习准备语料，当前未接入 Agent 的检索流程。结构化结果写在 `data/case-catalog/cases.json`，仍由 `.gitignore` 排除；原始表格通过本机页面下载，服务不会监听公网地址。
+打开 `http://localhost:8888/`。**数据集管理**视图按来源、品类和价格筛选真实需求与报价样例，检索商品或 CASE ID，逐条查看当时的买家需求、报价过程、规格、规则判断、成本线索及原始工作簿。当前 201 个 CASE 中有 108 个客户报价单 CASE、189 行报价明细，另含 Agent 分析和工作材料；并非每个 CASE 都有真实报价。这些记录为后续案例检索与学习准备语料，当前未接入 Agent 的检索流程。结构化结果写在 `data/case-catalog/cases.json`，仍由 `.gitignore` 排除；原始表格通过本机页面下载，服务不会监听公网地址。
 
 **报价 Agent** 视图分三块控制：
 
@@ -275,7 +331,7 @@ tests/                                    # 分类、定价、门禁、插件与
 ## 安全与已知边界
 
 - 只允许 Alibaba RFQ 域名和已知图片 CDN，不跟随买家文本中的任意外链。
-- 默认 `local-ocr` 只向 Agent 提供 OCR 文本；只有经过验证的多模态网关才应启用 `IMAGE_ANALYSIS_MODE=agent-read`。
+- 历史模式名 `local-ocr` 只向分析 Agent 提供 OCR 文本，但 OCR 本身使用 GLM 云服务；只有经过验证的多模态网关才应启用 `IMAGE_ANALYSIS_MODE=agent-read`。
 - Agent 默认没有 Bash、写文件、联网、子 Agent、外部 MCP 或任意浏览器工具权限。
 - 默认 EXW；不自动估算国际运费、税费、认证、关税或供应商交期。
 - 不读取或利用竞争对手报价金额。

@@ -6,7 +6,7 @@ import { buildAgentInputAudit } from "../../../src/agent-audit.js";
 import { connectBrowser, assertAlibabaReady } from "../../../src/browser.js";
 import { classifyRfq } from "../../../src/classifier.js";
 import { collectSearchPage, hydrateDetail } from "../../../src/collector.js";
-import { loadConfig } from "../../../src/config.js";
+import { loadConfig, projectDir } from "../../../src/config.js";
 import { createDraft } from "../../../src/drafter.js";
 import { fillQuoteForm, submissionToken } from "../../../src/form.js";
 import { priceRfq } from "../../../src/pricing.js";
@@ -14,7 +14,7 @@ import { parseNumber, stableRfqId, writeJson } from "../../../src/utils.js";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 export const pluginDir = path.resolve(scriptDir, "..");
-export const projectRoot = path.resolve(pluginDir, "../..");
+export const projectRoot = projectDir;
 const draftsDir = path.join(projectRoot, "data/drafts");
 const runsDir = path.join(projectRoot, "data/runs");
 

@@ -6,6 +6,7 @@ import { classifyRfq } from "./classifier.js";
 import { collectSearchPage, hydrateDetail, keywordPrefilter } from "./collector.js";
 import { createDraft } from "./drafter.js";
 import { priceRfq } from "./pricing.js";
+import { notifyOpportunity } from "./notifications.js";
 import { appendJsonl, loadState, saveState, sleep, writeJson } from "./utils.js";
 
 export async function runCycle(config) {
@@ -75,6 +76,10 @@ export async function runCycle(config) {
       record.timing.discoveryToSubmissionMs = record.submission.completedAt
         ? Date.parse(record.submission.completedAt) - Date.parse(hydrated.collectedAt)
         : null;
+      writeJson(relativePath, record);
+      // 草稿已落盘后才发送系统通知。通知失败只记录状态，不中断扫描，
+      // 也不会绕过控制台的逐单回填/提交确认。
+      record.notification = await notifyOpportunity(record, config);
       writeJson(relativePath, record);
       appendJsonl("data/rfqs/events.jsonl", { ...record, agentInput: undefined, rfq: { ...record.rfq, detailText: undefined } });
       state.seen[hydrated.id] = {

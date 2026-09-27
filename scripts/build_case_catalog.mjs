@@ -12,7 +12,8 @@ import { fileURLToPath } from "node:url";
 import AdmZip from "adm-zip";
 import * as XLSX from "xlsx";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+import { projectDir } from "../src/paths.js";
+const ROOT = projectDir;
 const DATA = path.join(ROOT, "data");
 const ARCHIVE = path.join(DATA, "reference-materials/2026-09-23-dingtalk/9.23报价模版收集.zip");
 const OUTPUT = path.join(DATA, "case-catalog/cases.json");
@@ -173,6 +174,7 @@ function findCostNotes(book, sourceId) {
 }
 
 function manualCases() {
+  if (!fs.existsSync(ARCHIVE)) return [[], 0];
   const groups = new Map();
   let htmlNamedXlsx = 0;
   const archive = new AdmZip(ARCHIVE);

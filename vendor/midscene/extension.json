@@ -1,0 +1,11 @@
+{
+  "name": "Midscene.js",
+  "releaseVersion": "1.12.9",
+  "manifestVersion": "1.99",
+  "archive": "midscene-extension-v1.12.9.zip",
+  "size": 10048522,
+  "sha256": "efb02bf28535b09ec9bb05cb248a9e8959214b5772942bb1d9d1e21efeb2dff1",
+  "source": "https://github.com/web-infra-dev/midscene/releases/download/v1.12.9/midscene-extension-v1.12.9.zip",
+  "release": "https://github.com/web-infra-dev/midscene/releases/tag/v1.12.9",
+  "license": "MIT"
+}

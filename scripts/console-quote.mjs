@@ -6,11 +6,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AUTO_CONTACT_ACK, evaluateAutoContact, loadContactState } from "../src/auto-contact.js";
-import { loadConfig } from "../src/config.js";
+import { loadConfig, projectDir } from "../src/config.js";
 import { submissionToken } from "../src/form.js";
 import { fillQuote, submitQuote } from "../plugins/alibaba-rfq-midscene/scripts/runtime.mjs";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root = projectDir;
 const draftsDir = path.join(root, "data/drafts");
 const id = process.argv[3] || "";
 const command = process.argv[2] || "list";

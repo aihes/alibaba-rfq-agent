@@ -1,0 +1,7 @@
+{
+  "version": "3.1.0",
+  "archive": "terminal-notifier-3.1.0.zip",
+  "sha256": "e969d4ae20287da1ba55495ae31dcedd8e9069deb8ce4eed24f6561a5fc3e4d5",
+  "source": "https://github.com/julienXX/terminal-notifier/releases/download/3.1.0/terminal-notifier-3.1.0.zip",
+  "license": "MIT; Terminal.icns copyright Apple"
+}

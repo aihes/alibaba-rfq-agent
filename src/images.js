@@ -102,9 +102,11 @@ export async function captureRfqImages(page, rfqId, config) {
     }
   }
   for (const asset of assets) {
-    const ocr = await extractImageText(asset.filePath);
+    const ocr = await extractImageText(asset.filePath, config);
     asset.ocrStatus = ocr.status;
     asset.ocrText = ocr.text;
+    asset.ocrProvider = ocr.provider;
+    if (ocr.requestId) asset.ocrRequestId = ocr.requestId;
     if (ocr.error) asset.ocrError = ocr.error;
   }
   return assets;

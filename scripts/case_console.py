@@ -8,6 +8,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -50,11 +51,12 @@ class OperatorConsole:
         self.current = None
         self.settings_file = self.ops_dir / "settings.json"
         self.last_run_file = self.ops_dir / "last-run.json"
-        self.settings = {"browserEnabled": False, "quoteEnabled": False, "alertsEnabled": True}
+        self.settings = {"browserEnabled": False, "quoteEnabled": False, "alertsEnabled": True, "notificationsEnabled": False}
+        self.notifications_url = "http://localhost:8888/"
         if self.settings_file.exists():
             try:
                 saved = json.loads(self.settings_file.read_text())
-                self.settings.update({key: saved[key] for key in ("browserEnabled", "alertsEnabled") if type(saved.get(key)) is bool})
+                self.settings.update({key: saved[key] for key in ("browserEnabled", "alertsEnabled", "notificationsEnabled") if type(saved.get(key)) is bool})
             except (OSError, ValueError):
                 pass
         self.last_run = None
@@ -81,7 +83,7 @@ class OperatorConsole:
         cli = self.root / "plugins/alibaba-rfq-midscene/scripts/cli.mjs"
         checks = [
             {"key": "node", "ok": bool(node), "label": "Node.js 运行环境", "detail": node or "未找到 Node.js，请先安装 Node 20+"},
-            {"key": "plugin", "ok": cli.exists(), "label": "Midscene 插件脚本", "detail": "已安装" if cli.exists() else "plugins/alibaba-rfq-midscene 缺失，请检查插件目录"},
+            {"key": "plugin", "ok": cli.exists(), "label": "Midscene 本地适配脚本", "detail": "脚本就绪；Chrome 插件请按下方安装步骤加载" if cli.exists() else "plugins/alibaba-rfq-midscene 缺失，请检查插件目录"},
             {"key": "bridge", "ok": False, "label": "Chrome Bridge 连接", "detail": "未检测"},
             {"key": "login", "ok": False, "label": "Alibaba 登录态", "detail": "未检测"},
         ]
@@ -183,8 +185,33 @@ class OperatorConsole:
             run = dict(self.current or self.last_run or {})
             settings = dict(self.settings)
             env_checking = self._env_process is not None
+        try:
+            notification = json.loads((self.ops_dir / "notification-status.json").read_text())
+        except (OSError, ValueError):
+            notification = None
         return {"settings": settings, "searchTerms": SEARCH_TERMS, "run": run or None,
-                "log": self._tail(run), "serverTime": now(), "envChecking": env_checking}
+                "log": self._tail(run), "serverTime": now(), "envChecking": env_checking,
+                "notifications": {"supported": sys.platform == "darwin", "last": notification}}
+
+    def test_notification(self):
+        # 用户点击才发送测试；不连接浏览器，不开启报价。发送结果只表示
+        # 操作系统是否接受，不能把系统专注模式隐藏横幅误报成已展示。
+        with self.lock:
+            if not self.settings["notificationsEnabled"]:
+                raise ConsoleError("请先开启机会系统通知")
+        node = shutil.which("node")
+        if not node:
+            raise ConsoleError("未找到 Node.js")
+        try:
+            result = subprocess.run([node, str(self.root / "scripts/notify-console.mjs"), "test"],
+                                    cwd=self.root, capture_output=True, text=True, timeout=25, check=False,
+                                    env={**os.environ, "RFQ_CONSOLE_SETTINGS_FILE": str(self.settings_file.resolve()),
+                                         "RFQ_CONSOLE_URL": self.notifications_url})
+            if result.returncode:
+                raise ConsoleError("系统通知组件运行失败，请检查通知权限和本机日志")
+            return json.loads(result.stdout)
+        except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+            raise ConsoleError("系统通知发送超时或组件不可用，请允许通知后重试") from error
 
     def update_settings(self, changes):
         if not isinstance(changes, dict) or not changes or any(key not in self.settings or type(value) is not bool for key, value in changes.items()):
@@ -332,6 +359,10 @@ class OperatorConsole:
             # 显式覆盖“全部”也很必要：删除 shell 变量还会让 dotenv 重新
             # 注入 .env 中的子集。这里用配置的完整列表覆盖这两种来源。
             environment["SEARCH_TERMS"] = ",".join(SEARCH_TERMS) if term == ALL_TERMS else term
+            # 子任务直接从本机持久化设置读通知开关；无需前端页面轮询，
+            # 也能在持续监控期间即时关闭。点击通知使用实际服务端口。
+            environment["RFQ_CONSOLE_SETTINGS_FILE"] = str(self.settings_file.resolve())
+            environment["RFQ_CONSOLE_URL"] = self.notifications_url
             log_file = (self.ops_dir / f"{run['id']}.log").open("wb")
             try:
                 process = self.popen(command, cwd=self.root, env=environment, stdout=log_file,

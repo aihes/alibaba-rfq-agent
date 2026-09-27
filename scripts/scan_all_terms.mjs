@@ -10,12 +10,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { projectDir } from "../src/paths.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export function scanAllTerms({ run = spawnSync, log = console.log, error = console.error } = {}) {
   // 直接读取配置，避免 shell/.env 的 SEARCH_TERMS 把“全部”缩成子集。
-  const { searchTerms } = JSON.parse(fs.readFileSync(path.join(root, "config/default.json"), "utf8"));
+  const { searchTerms } = JSON.parse(fs.readFileSync(path.join(projectDir, "config/default.json"), "utf8"));
   const cli = path.join(root, "plugins/alibaba-rfq-midscene/scripts/cli.mjs");
   for (const term of searchTerms) {
     log(`[case-console] Scanning category: ${term}`);

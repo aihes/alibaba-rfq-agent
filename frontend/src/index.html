@@ -26,7 +26,7 @@
           <span class="note-symbol">↗</span>
           <p>每条数据集都保留当时的买家需求、报价过程与依据，供 Agent 后续学习。</p>
         </div>
-        <div class="rail-footer"><span class="live-dot"></span>仅在本机运行<br><small>原始文件保留于 data/</small></div>
+        <div class="rail-footer"><span class="live-dot"></span>数据保存在本机<br><small id="runtime-hint">原始文件保留于 data/</small></div>
       </aside>
 
       <main class="main">
@@ -55,11 +55,52 @@
           <div class="section-heading"><div><span class="section-index">02 / AGENT</span><h2>报价 Agent</h2></div><p>本机任务 · 单任务运行</p></div>
           <div class="console-intro"><strong>检测、扫描、报价分级控制。</strong><span>先确认环境就绪，再按模式扫描 RFQ：仅产出报价话术，或经人工逐单确认后操作浏览器报价。</span></div>
           <div class="ops-alert" id="ops-alert" hidden role="alert"></div>
+          <details id="desktop-setup" class="desktop-setup" hidden>
+            <summary>应用设置 · 首次使用先配置模型</summary>
+            <p class="ops-help">填写模型服务后保存，再安装下方插件并登录 Alibaba。模型连接测试只发送固定文本，会产生少量 API 用量。</p>
+            <form id="model-settings-form" class="model-settings-form">
+              <label>需求分析与话术服务<select id="model-provider"><option value="openai-http">GLM / OpenAI 兼容 API</option><option value="anthropic-http">Anthropic API</option></select></label>
+              <label>模型名称<input id="model-name" required maxlength="200" placeholder="glm-4.7" /></label>
+              <label class="wide">模型接口地址<input id="model-api-url" type="url" required spellcheck="false" /></label>
+              <label>模型 API Key<input id="model-api-key" type="password" autocomplete="off" placeholder="留空保留已有密钥" /></label>
+              <label>图片文字识别<select id="ocr-provider"><option value="glm-ocr">GLM OCR 云识别</option><option value="off">关闭图片识别</option></select></label>
+              <label>GLM OCR API Key<input id="ocr-api-key" type="password" autocomplete="off" placeholder="可使用同一智谱账号的 Key" /></label>
+              <label>GLM OCR 接口地址<input id="ocr-api-url" type="url" required spellcheck="false" /></label>
+              <label>已核实的交货地点 / 港口<input id="quote-port" maxlength="200" placeholder="EXW 工厂城市或 FOB 装运港；未核实请留空" /></label>
+              <label>持续监控间隔（秒）<input id="poll-interval" type="number" min="60" max="86400" required value="600" /></label>
+              <p class="ops-help wide">分析时需求文本会发送到所选模型；开启 GLM OCR 后，RFQ 图片会发送到智谱识别，按服务用量计费。密钥保存在本机，保存后不回显。</p>
+              <div class="settings-actions wide"><button id="model-save" type="submit" class="primary">保存设置</button><button id="model-test" type="button">测试模型连接</button><button id="model-clear" type="button">清除已保存密钥</button></div>
+            </form>
+            <p id="model-settings-status" class="extension-status" role="status" aria-live="polite"></p>
+            <div class="data-import-row"><div><strong>迁移已有 CASE</strong><p class="ops-help">选择原项目的 data 文件夹，导入报价、附件和来源材料。已有同名数据不会被覆盖。</p></div><button id="desktop-import" type="button">导入已有数据</button></div>
+            <p class="ops-help">本机数据目录：<span id="desktop-data-path"></span><br>关闭窗口后应用在后台运行；从菜单选择「退出并停止任务」才会结束。电脑休眠期间无法监听。</p>
+          </details>
           <div class="agent-grid">
             <div class="agent-card">
               <div class="ops-heading"><span>01 / ENV</span><h3>环境检测</h3></div>
+              <p class="browser-isolation">建议用专用 Chrome 配置运行 Agent，只在该配置启用 Midscene Bridge。日常办公用其他浏览器或主配置；扫描会切换 Alibaba 标签页。</p>
               <div id="env-checks" class="env-checks"><p class="ops-help">进入本页自动检查本地环境；浏览器开关开启且无运行任务时才检测连接。</p></div>
               <div class="env-actions"><button type="button" id="env-recheck" class="light">重新检测</button><small id="env-time">—</small></div>
+              <details class="extension-setup" id="extension-setup">
+                <summary>首次使用：安装 Midscene 插件</summary>
+                <p class="extension-note">安装包已放在本项目中。首次安装按以下步骤操作，后续启动直接使用。</p>
+                <p id="extension-version" class="extension-version">正在读取本地安装资源…</p>
+                <ol class="extension-steps">
+                  <li><strong>准备插件目录</strong><span>启动时自动准备；下方显示就绪后，复制目录。</span>
+                    <label class="extension-path-label" for="extension-path">Chrome 加载时选择这个文件夹</label>
+                    <textarea id="extension-path" rows="3" readonly spellcheck="false" aria-label="本地插件目录"></textarea>
+                    <div class="extension-actions"><button type="button" id="extension-copy-path" disabled>复制插件目录</button><button type="button" id="extension-prepare">准备安装文件</button></div>
+                  </li>
+                  <li><strong>在 Chrome 中加载插件</strong><span>复制下方地址到 Chrome 地址栏打开，开启右上角「开发者模式」，点击「加载已解压的扩展程序」，选择第 1 步的文件夹。</span>
+                    <span>Mac 选择文件夹时按 ⌘⇧G，粘贴插件目录并回车，再点击「选择」。</span>
+                    <div class="extension-address"><input id="extension-manager" value="chrome://extensions" readonly aria-label="Chrome 扩展管理地址" /><button type="button" id="extension-copy-manager">复制地址</button></div>
+                  </li>
+                  <li><strong>打开 Bridge Mode 并检测</strong><span>在 Chrome 右上角拼图菜单固定并打开 Midscene.js，进入「Bridge Mode」。开启下方浏览器开关并重新检测；插件询问连接时点击「Allow」，同时确认 Alibaba 已登录。</span></li>
+                </ol>
+                <p id="extension-status" class="extension-status" role="status" aria-live="polite">准备文件不会安装插件或开启浏览器控制。</p>
+                <a href="/api/extension/download" class="extension-download" download>下载项目内的官方 ZIP 安装包 ↗</a>
+                <p class="extension-note">安装后请保留插件目录，Chrome 会继续使用这里的文件。</p>
+              </details>
               <label class="toggle-row spaced"><span><strong>允许 Agent 控制浏览器</strong><small>关闭时禁止连接 Chrome Bridge，也无法扫描；运行中关闭会停止任务。</small></span><input id="browser-enabled" type="checkbox" role="switch" /></label>
             </div>
             <div class="agent-card">
@@ -88,6 +129,9 @@
               </div>
               <p class="ops-help" id="mode-help">当前模式：仅生成报价话术。</p>
               <div class="mode-note"><span>开启逐单报价会同时开启浏览器控制；扫描和监控仍只生成草稿。重启服务后回落到话术模式。</span></div>
+              <label class="toggle-row"><span><strong>机会系统通知</strong><small>新草稿通过当前价格规则、规格、交货地点和金额核对后提醒；点击查看对应草稿供人工复核。</small></span><input id="notifications-enabled" type="checkbox" role="switch" /></label>
+              <div class="notification-actions"><button type="button" id="notification-test" disabled>发送测试通知</button><small id="notification-platform">当前支持 macOS</small></div>
+              <p class="notification-status" id="notification-status" role="status" aria-live="polite">关闭工作台页面仍可通知；请保持终端、监听 Chrome 和持续监控任务运行。</p>
             </div>
           </div>
           <!-- 稳定的交互入口；monitor-card 仅负责样式，布局调整时可改名。 -->

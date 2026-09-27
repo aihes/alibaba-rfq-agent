@@ -30,7 +30,7 @@
 ```text
 Chrome(已登录) ──Midscene Bridge──> 扫描器 ──> 规则预筛 ──> Agent 分析(Claude)
                                                           │
-本地控制台(127.0.0.1:8765) <── 数据集/草稿/任务控制 ──────┘
+本地控制台(localhost:8888) <── 数据集/草稿/任务控制 ──────┘
         │
         └── 环境检测 · RFQ 扫描 · 报价模式 · 任务监控 · 逐单报价工作台
 ```
@@ -44,6 +44,15 @@ Chrome(已登录) ──Midscene Bridge──> 扫描器 ──> 规则预筛 �
 ## 快速开始
 
 ```bash
-npm install && npm run cases:up   # 数据集 + 本地控制台，一条命令
-# 打开 http://127.0.0.1:8765/ ，报价 Agent 视图先看环境检测
+npm install   # 首次使用
+npm start     # 每次启动（npm run cases:up 也可以）
+# 浏览器打开 http://localhost:8888/ ，先浏览数据集，需要扫描再进入报价 Agent
+# 保持终端打开；按 Ctrl+C 关闭服务
 ```
+
+首次扫描前，在「报价 Agent → 首次使用：安装 Midscene 插件」按步骤安装。
+官方 ZIP 随项目存放于 `vendor/midscene/`，启动时自动校验并解压；复制页面中的目录，在 Chrome 的 `chrome://extensions` 开启开发者模式并「加载已解压的扩展程序」，再打开 Midscene.js 的 Bridge Mode。安装后保留 `data/browser-extension/` 目录。
+
+建议日常浏览器办公，专用 Chrome 配置负责监听，只在专用配置开启 Bridge。扫描会切换 Alibaba 标签页，主配置中的另一个标签页不能提供隔离。
+
+macOS 用户可在「报价模式」开启「机会系统通知」并发送测试，首次允许系统通知。后台分析发现符合规则的复核机会时直接提醒，同一 RFQ 去重；关闭工作台页面仍可通知，终端、Chrome 和监控任务须保持运行。通知组件随项目提供，点击提醒查看对应草稿，报价仍需逐单确认。

@@ -1,10 +1,73 @@
-const state = { catalog: null, source: 'priced', category: 'all', query: '', priced: false, selected: null, tab: 'summary', view: 'cases', ops: null, opsFlash: '', envLoading: false, lastFinishedRun: null, quotes: null, quoteSelected: null, quoteDetail: null, quoteReview: null };
+const state = { catalog: null, source: 'priced', category: 'all', query: '', priced: false, selected: null, tab: 'summary', view: 'cases', ops: null, opsFlash: '', envLoading: false, notificationTesting: false, notificationFlash: '', lastFinishedRun: null, quotes: null, quoteSelected: null, quoteDetail: null, quoteReview: null };
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const fmt = (value, maximumFractionDigits = 3) => value == null ? '—' : new Intl.NumberFormat('en-US', { maximumFractionDigits }).format(value);
 const label = (item) => item.sourceType === 'agent_run' ? 'AGENT / RFQ' : item.quotes.length ? 'MANUAL / PI' : 'MANUAL / FILE';
 const statusClass = (item) => item.status === 'customer_quote_document' || item.status === 'conditional_quote' ? 'orange' : item.status === 'working_material_only' ? 'gray' : '';
 const safeAlibabaUrl = (value) => { try { const url = new URL(value); return url.protocol === 'https:' && ['sourcing.alibaba.com', 'rfqposting.alibaba.com'].includes(url.hostname) ? url.href : null; } catch { return null; } };
+let desktopInfo = null;
+const keepRunning = () => desktopInfo?.desktop ? '关闭窗口仍可通知；请保持 RFQ 助手、监听 Chrome 和监控任务运行。电脑休眠期间无法监听。' : '关闭工作台页面仍可通知；请保持终端、监听 Chrome 和持续监控任务运行。';
+
+function renderModelSettings(settings) {
+  $('#model-provider').value = settings.agentProvider;
+  $('#model-name').value = settings.modelName;
+  $('#model-api-url').value = settings.modelApiUrl;
+  $('#ocr-provider').value = settings.ocrProvider;
+  $('#ocr-api-url').value = settings.ocrApiUrl;
+  $('#quote-port').value = settings.quotePort || '';
+  $('#poll-interval').value = settings.pollIntervalSeconds || '600';
+  $('#model-api-key').value = ''; $('#ocr-api-key').value = '';
+  $('#model-settings-status').textContent = `模型密钥${settings.modelKeyConfigured ? '已保存' : '未配置'} · OCR 密钥${settings.ocrKeyConfigured ? '已保存' : '未配置'}${settings.encryptedStorage ? ' · 本机加密保存' : ' · 系统密钥加密当前不可用'}`;
+}
+async function loadDesktop() {
+  try {
+    const response = await fetch('/api/desktop/info');
+    if (!response.ok) return;
+    desktopInfo = await response.json();
+    if (!desktopInfo.desktop) return;
+    $('#desktop-setup').hidden = false;
+    $('#desktop-setup').open = !desktopInfo.settings.modelKeyConfigured;
+    $('#desktop-data-path').textContent = desktopInfo.workspace;
+    $('#runtime-hint').textContent = '关闭窗口继续运行 · 菜单退出停止';
+    $('#notification-platform').textContent = '桌面应用原生通知';
+    renderModelSettings(desktopInfo.settings);
+    $('#model-provider').addEventListener('change', () => {
+      const anthropic = $('#model-provider').value === 'anthropic-http';
+      $('#model-api-url').value = anthropic ? 'https://api.anthropic.com/v1/messages' : 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+      $('#model-name').value = anthropic ? '' : 'glm-4.7';
+    });
+    $('#model-settings-form').addEventListener('submit', async (event) => {
+      event.preventDefault(); $('#model-save').disabled = true;
+      try {
+        const value = await opsRequest('/api/desktop/settings', { agentProvider: $('#model-provider').value,
+          modelName: $('#model-name').value, modelApiUrl: $('#model-api-url').value,
+          modelApiKey: $('#model-api-key').value, ocrProvider: $('#ocr-provider').value,
+          ocrApiKey: $('#ocr-api-key').value, ocrApiUrl: $('#ocr-api-url').value,
+          quotePort: $('#quote-port').value, pollIntervalSeconds: $('#poll-interval').value });
+        renderModelSettings(value);
+      } catch (error) { $('#model-settings-status').textContent = error.message; }
+      finally { $('#model-save').disabled = false; }
+    });
+    $('#model-test').addEventListener('click', async () => {
+      $('#model-test').disabled = true; $('#model-settings-status').textContent = '正在测试已保存的模型配置…';
+      try { $('#model-settings-status').textContent = (await opsRequest('/api/desktop/model/test', {})).detail; }
+      catch (error) { $('#model-settings-status').textContent = error.message; }
+      finally { $('#model-test').disabled = false; }
+    });
+    $('#model-clear').addEventListener('click', async () => {
+      try { renderModelSettings(await opsRequest('/api/desktop/settings', { clearSecrets: ['modelApiKey', 'ocrApiKey'] })); }
+      catch (error) { $('#model-settings-status').textContent = error.message; }
+    });
+    $('#desktop-import').addEventListener('click', async () => {
+      $('#desktop-import').disabled = true;
+      try {
+        const value = await opsRequest('/api/desktop/import', {});
+        if (!value.canceled) { state.ops = value; renderOps(); $('#model-settings-status').textContent = `已导入 ${value.importedFiles} 个文件，正在整理 CASE…`; }
+      } catch (error) { $('#model-settings-status').textContent = error.message; }
+      finally { $('#desktop-import').disabled = false; }
+    });
+  } catch (error) { $('#model-settings-status').textContent = `无法读取应用设置：${error.message}`; }
+}
 
 function firstPrice(item) {
   const quote = item.quotes[0];
@@ -179,6 +242,54 @@ const termLabel = (term) => term === '__all__' ? '全部品类' : term;
 const modeHelp = { draft: '当前模式：仅生成报价话术，Agent 不操作报价表单。', auto: '当前模式：逐单浏览器报价。请在下方选择草稿，确认后回填，再逐单确认提交；扫描和监控仍只生成草稿。' };
 const currentMode = (settings) => settings.quoteEnabled ? 'auto' : 'draft';
 
+function renderExtension(value) {
+  $('#extension-version').textContent = `${value.name} · 官方安装包 v${value.releaseVersion}`;
+  $('#extension-path').value = value.installPath;
+  $('#extension-copy-path').disabled = !value.ready;
+  $('#extension-status').textContent = value.ready
+    ? '安装文件已就绪。请继续第 2 步，在 Chrome 中加载插件。'
+    : '安装文件尚未准备。点击「准备安装文件」后继续。';
+}
+
+async function loadExtension() {
+  try {
+    const response = await fetch('/api/extension');
+    const value = await response.json();
+    if (!response.ok) throw new Error(value.error || `HTTP ${response.status}`);
+    renderExtension(value);
+  } catch (error) {
+    $('#extension-status').textContent = error.message;
+    $('#extension-version').textContent = '本地安装资源尚未就绪';
+  }
+}
+
+async function prepareExtension() {
+  const button = $('#extension-prepare');
+  button.disabled = true;
+  $('#extension-status').textContent = '正在校验并准备本地安装文件…';
+  try {
+    // 只准备随项目提供的文件；不改变浏览器/报价开关，也不连接 Chrome。
+    renderExtension(await opsRequest('/api/extension/prepare', {}));
+  } catch (error) {
+    $('#extension-status').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function copyExtensionField(selector, label) {
+  const field = $(selector);
+  try {
+    await navigator.clipboard.writeText(field.value);
+    $('#extension-status').textContent = `${label}已复制。`;
+  } catch {
+    // 部分浏览器不允许剪贴板写入；直接选中文本，用户仍可手动复制。
+    field.focus();
+    field.select();
+    $('#extension-status').textContent = `已选中${label}，请按 Ctrl+C（Mac 为 ⌘C）复制。`;
+  }
+}
+
 async function loadEnv(force = false) {
   // 避免切换页面/连续点击同时触发检测；服务端仍负责真正的浏览器互斥。
   if (state.envLoading) return;
@@ -228,6 +339,13 @@ function renderOps() {
   const run = data.run;
   $('#browser-enabled').checked = data.settings.browserEnabled;
   $('#alerts-enabled').checked = data.settings.alertsEnabled;
+  $('#notifications-enabled').checked = data.settings.notificationsEnabled;
+  $('#notifications-enabled').disabled = data.notifications?.supported === false;
+  $('#notification-test').disabled = !data.settings.notificationsEnabled || data.notifications?.supported === false || state.notificationTesting;
+  $('#notification-status').textContent = state.notificationFlash || (data.notifications?.supported === false
+    ? '当前系统通知仅支持 macOS；页面内的异常提醒仍可使用。'
+    : !data.settings.notificationsEnabled ? '机会系统通知已关闭。开启后请先发送测试通知，并按系统提示允许通知。'
+    : data.notifications?.last?.detail || keepRunning());
   const mode = currentMode(data.settings);
   document.querySelectorAll('[data-mode]').forEach((button) => {
     const active = button.dataset.mode === mode;
@@ -280,6 +398,8 @@ async function loadQuotes() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     state.quotes = await response.json();
     $('#submitted-count').textContent = new Set(state.quotes.drafts.filter((draft) => draft.submissionStatus === 'submitted').map((draft) => draft.rfqId)).size;
+    const linkedDraft = new URL(location.href).searchParams.get('draft');
+    if (!state.quoteSelected && state.quotes.drafts.some((draft) => draft.id === linkedDraft)) state.quoteSelected = linkedDraft;
     if (!state.quotes.drafts.some((draft) => draft.id === state.quoteSelected)) state.quoteSelected = state.quotes.drafts[0]?.id || null;
     $('#quote-count').textContent = `${state.quotes.counts.total} 条草稿 · ${state.quotes.counts.quoted} 条规则报价`;
     renderQuoteList();
@@ -430,6 +550,7 @@ async function runAction(kind) {
 
 async function start() {
   try {
+    await loadDesktop();
     state.selected = new URL(location.href).searchParams.get('case');
     $('#search').addEventListener('input', (event) => { state.query = event.target.value; renderList(); });
     $('#category').addEventListener('change', (event) => { state.category = event.target.value; renderList(); });
@@ -438,6 +559,19 @@ async function start() {
     document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
     document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => runAction(button.dataset.action)));
     $('#env-recheck').addEventListener('click', () => loadEnv(true));
+    $('#extension-prepare').addEventListener('click', prepareExtension);
+    $('#extension-copy-path').addEventListener('click', () => copyExtensionField('#extension-path', '插件目录'));
+    $('#extension-copy-manager').addEventListener('click', () => copyExtensionField('#extension-manager', '扩展管理地址'));
+    $('#notification-test').addEventListener('click', async () => {
+      state.notificationTesting = true;
+      state.notificationFlash = '正在发送系统通知；首次使用请在系统提示中允许通知。';
+      renderOps();
+      try {
+        const result = await opsRequest('/api/notifications/test', {});
+        state.notificationFlash = result.detail;
+      } catch (error) { state.notificationFlash = error.message; }
+      finally { state.notificationTesting = false; await updateOps(); }
+    });
     document.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', async () => {
       // 这里只改变逐单工作台权限，不启动扫描，也不自动联系买家。
       const settings = button.dataset.mode === 'auto'
@@ -446,10 +580,11 @@ async function start() {
       try { state.opsFlash = ''; state.ops = await opsRequest('/api/ops/settings', settings); renderOps(); await loadEnv(true); }
       catch (error) { state.opsFlash = error.message; renderOps(); }
     }));
-    for (const [key, id] of [['browserEnabled', '#browser-enabled'], ['alertsEnabled', '#alerts-enabled']]) {
+    for (const [key, id] of [['browserEnabled', '#browser-enabled'], ['alertsEnabled', '#alerts-enabled'], ['notificationsEnabled', '#notifications-enabled']]) {
       $(id).addEventListener('change', async (event) => {
         try {
           state.opsFlash = '';
+          if (key === 'notificationsEnabled') state.notificationFlash = '';
           state.ops = await opsRequest('/api/ops/settings', { [key]: event.target.checked });
           renderOps();
           // 立即刷新授权状态；关闭时服务端仅返回本地检查，不连接 Chrome。
@@ -464,8 +599,10 @@ async function start() {
     });
     await reloadCatalog();
     await updateOps();
+    await loadExtension();
     await loadQuotes();
-    setView(new URL(location.href).searchParams.get('view'));
+    setView(new URL(location.href).searchParams.get('view') || (desktopInfo?.desktop && !desktopInfo.settings.modelKeyConfigured ? 'console' : 'cases'));
+    if (new URL(location.href).searchParams.has('draft') && state.view === 'console') $('#quote-detail')?.scrollIntoView({ block: 'start' });
     setInterval(() => { if (state.view === 'console' || ['running', 'stopping', 'indexing'].includes(state.ops?.run?.status)) updateOps(); }, 2000);
   } catch (error) {
     $('#case-detail').innerHTML = `<div class="empty">无法读取 CASE 数据：${esc(error.message)}<br>请先运行 npm run cases:build，然后启动本地页面。</div>`;

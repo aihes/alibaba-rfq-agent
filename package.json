@@ -1,6 +1,6 @@
 {
   "name": "alibaba-rfq-agent",
-  "version": "0.5.1",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "description": "Alibaba RFQ collector, guarded pricing engine and quote-draft assistant for the user's existing logged-in Chrome session.",
@@ -8,6 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "start": "npm run cases:up",
     "once": "node src/cli.js once",
     "watch": "node src/cli.js watch",
     "fill": "node src/cli.js fill",
@@ -16,19 +17,32 @@
     "doctor": "node src/cli.js doctor",
     "cases:build": "node scripts/build_case_catalog.mjs",
     "cases:up": "npm run cases:build && npm run cases:serve",
-    "cases:serve": "python3 scripts/serve_case_catalog.py",
+    "cases:serve": "node scripts/serve_case_catalog.mjs",
     "test": "node --test",
     "midscene:status": "node plugins/alibaba-rfq-midscene/scripts/cli.mjs status",
     "midscene:scan": "node plugins/alibaba-rfq-midscene/scripts/cli.mjs scan",
     "midscene:analyze": "node plugins/alibaba-rfq-midscene/scripts/cli.mjs analyze",
     "midscene:fill": "node plugins/alibaba-rfq-midscene/scripts/cli.mjs fill",
-    "midscene:submit": "node plugins/alibaba-rfq-midscene/scripts/cli.mjs submit"
+    "midscene:submit": "node plugins/alibaba-rfq-midscene/scripts/cli.mjs submit",
+    "desktop:install-runtime": "node node_modules/electron/install.js",
+    "desktop:dev": "npm run desktop:install-runtime && electron .",
+    "desktop:pack": "npm run desktop:install-runtime && electron-builder --dir",
+    "desktop:dist": "npm run desktop:install-runtime && electron-builder --mac --arm64 --publish never",
+    "desktop:dist:win": "node scripts/build-windows.mjs",
+    "notifications:tool": "node scripts/notification-tools.mjs",
+    "desktop:check": "node scripts/check-desktop-package.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.274",
     "@midscene/web": "^1.12.9",
     "adm-zip": "^0.6.1",
     "dotenv": "^16.6.1",
+    "sharp": "0.35.4",
     "xlsx": "^0.18.5"
-  }
+  },
+  "devDependencies": {
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3"
+  },
+  "main": "desktop/main.js"
 }
