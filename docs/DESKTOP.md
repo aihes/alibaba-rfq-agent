@@ -143,11 +143,11 @@ Electron 44 的 npm 包需要显式运行安装器，脚本已自动处理。开
 自动隔离安装 Windows sharp 预编译模块并写入 Windows 构建目录；
 不会把 Mac 原生模块误装进 Windows 包。仍需在 Windows 完成真实系统验证。
 
-入口：`desktop/main.js`；服务：`desktop/server.js`；任务控制：
-`desktop/console.js`；真实前端源码：`frontend/src/`。旧 Python 服务
+入口：`src/desktop/main.js`；服务：`src/desktop/server.js`；任务控制：
+`src/desktop/console.js`；真实前端源码：`src/frontend/`。旧 Python 服务
 保留为兼容参考，默认 Web 和桌面启动均不使用它。
 
-内置浏览器由 `desktop/embedded-browser.js` 管理，工作进程经临时私有令牌
+内置浏览器由 `src/desktop/embedded-browser.js` 管理，工作进程经临时私有令牌
 连接 `src/electron-browser.js`，不开放 Chromium 调试端口，不向工作台网页
 提供任意脚本执行权限。详细接口、边界和验证见 [内置浏览器说明](EMBEDDED-BROWSER.md)。
 

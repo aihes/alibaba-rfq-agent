@@ -658,7 +658,7 @@ function renderOps() {
       } catch (error) { if (entry.isConnected) entry.querySelector('.stage-evidence').textContent = `无法读取：${error.message}`; }
     }));
   }
-  $('#run-facts').innerHTML = run ? (run.kind.startsWith('quote_') ? `<div><span>RFQ</span><strong>${esc(run.rfqId || '—')}</strong></div><div><span>草稿</span><strong>${esc(run.draftId || '—')}</strong></div><div><span>退出码</span><strong>${esc(run.exitCode ?? '—')}</strong></div>` : `<div><span>监控品类</span><strong>${esc(termLabel(run.term) || '—')}</strong></div><div><span>新 RFQ 上限</span><strong>${esc(run.limit ?? '—')}</strong></div><div><span>退出码</span><strong>${esc(run.exitCode ?? '—')}</strong></div>`) : '<p>选择品类并启动任务，运行状态和日志会显示在这里。</p>';
+  $('#run-facts').innerHTML = run ? (run.kind.startsWith('quote_') ? `<div><span>RFQ</span><strong>${esc(run.rfqId || '—')}</strong></div><div><span>草稿</span><strong>${esc(run.draftId || '—')}</strong></div><div><span>退出码</span><strong>${esc(run.exitCode ?? '—')}</strong></div>` : `<div><span>监控品类</span><strong>${esc(termLabel(run.term) || '—')}</strong></div><div><span>发布时间范围</span><strong>${run.recentMinutes === 0 ? '不限' : Number.isInteger(run.recentMinutes) ? `最近 ${esc(run.recentMinutes)} 分钟` : '旧任务未记录'}</strong></div><div><span>退出码</span><strong>${esc(run.exitCode ?? '—')}</strong></div>`) : '<p>选择品类并启动任务，运行状态和日志会显示在这里。</p>';
   const log = $('#run-log');
   const follow = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
   log.textContent = data.log || '尚无运行日志。';
@@ -679,7 +679,7 @@ function renderOps() {
 
 const stageFieldNames = { rfqId: 'RFQ ID', title: '标题', summary: '列表摘要', detailText: '买家需求正文', quantityText: '买家数量', country: '国家/地区',
   quantity: '数量', widthMm: '宽度 (mm)', heightMm: '高度 (mm)', lengthMm: '长度 (mm)', bottomMm: '底宽 (mm)', capacityOz: '容量 (oz)', gsm: '纸张克重 (gsm)', material: '材料', greaseproof: '防油', printing: '印刷', flute: '楞型', color: '颜色',
-  searchTerm: '搜索词', maxCards: '最多读取', count: '结果数量', cards: '搜索结果', candidates: '新需求', scanned: '扫描数量', unique: '去重后',
+  searchTerm: '搜索词', count: '范围内数量', scannedCount: '扫描数量', cards: '搜索结果', candidates: '新需求', scanned: '扫描数量', unique: '去重后', recent: '发布时间范围内', recentMinutes: '最近 N 分钟', recentRfqMinutes: '最近 N 分钟', unknownPublishedAt: '发布时间无法识别', publishedText: '买家发布时间原文', publishedAt: '买家发布时间',
   prompt: '模型请求指令', inputJson: '模型实际输入', requestedModel: '请求模型', provider: '调用方式', analysis: '需求分析结果', fields: '提取规格',
   missingRequired: '缺失规格', riskFlags: '风险提示', buyerQuestions: '待问买家的问题', quote: '报价规则结果', draft: '拟回复',
   productName: '商品名称', productDetails: '拟填规格', buyerMessage: '拟发给买家的回复', quoteStatus: '价格状态', submissionStatus: '提交状态',
@@ -861,6 +861,7 @@ function quoteFacts(detail) {
     ['商品', detail.draft.productName || detail.rfq.title], ['数量', detail.quote.quantity ?? detail.rfq.quantityText], ['单价', quoteMoney(detail.quote.unitPriceUsd)],
     ['一次性费用', quoteMoney(detail.quote.setupUsd || 0)], ['总价', quoteMoney(detail.quote.totalUsd)], ['贸易条款', detail.quote.tradeTerm], ['交货地点', detail.draft.port],
     ['当前浏览器动作', quoteStatusNames[detail.submission.status] || detail.submission.status],
+    ['买家发布时间', detail.rfq.publishedAt ? localTime(detail.rfq.publishedAt) : detail.rfq.publishedText || '无法识别'],
     ['草稿生成时间', localTime(detail.createdAt)], ['文件更新时间', localTime(detail.updatedAt)]];
   if (detail.submittedAt) entries.push(['实际提交时间', localTime(detail.submittedAt)]);
   if (detail.archivedAt) entries.push(['移出列表时间', localTime(detail.archivedAt)]);
@@ -877,7 +878,7 @@ function quoteNarrative(detail) {
   const originalUrl = safeAlibabaUrl(rfq.detailUrl);
   const images = Array.isArray(detail.images) ? detail.images : [];
   return `<section class="quote-review-section"><div class="quote-review-heading"><span>01 / BUYER</span><h4>买家原始需求</h4></div>
-      <dl class="quote-source-meta"><div><dt>页面数量</dt><dd>${esc(rfq.quantityText || '未记录')}</dd></div><div><dt>国家 / 地区</dt><dd>${esc(rfq.buyer || '未记录')}</dd></div><div><dt>采集时间</dt><dd>${esc(localTime(rfq.collectedAt))}</dd></div></dl>
+      <dl class="quote-source-meta"><div><dt>页面数量</dt><dd>${esc(rfq.quantityText || '未记录')}</dd></div><div><dt>国家 / 地区</dt><dd>${esc(rfq.buyer || '未记录')}</dd></div><div><dt>买家发布时间</dt><dd>${esc(rfq.publishedAt ? localTime(rfq.publishedAt) : rfq.publishedText || '无法识别')}</dd></div><div><dt>采集时间</dt><dd>${esc(localTime(rfq.collectedAt))}</dd></div></dl>
       <div class="quote-source-actions">${originalUrl ? `<a href="${esc(originalUrl)}" target="_blank" rel="noopener noreferrer">打开 Alibaba 原始 RFQ ↗</a>` : '<span>这条记录没有可用的原始页面链接</span>'}</div>
       ${rfq.summary ? `<p class="quote-source-summary">列表摘要：${esc(rfq.summary)}</p>` : ''}
       <div class="quote-original"><strong>RFQ 详情原文</strong><p>${esc(rfq.detailText || '原始需求正文未保存在这条记录中；请核对 Alibaba 页面。')}</p></div>
@@ -1020,7 +1021,12 @@ async function reloadCatalog() {
 async function runAction(kind) {
   try {
     state.opsFlash = '';
-    state.ops = await opsRequest('/api/ops/start', { kind, term: $('#ops-term').value, limit: Number($('#ops-limit').value) });
+    const windowInput = $('#ops-recent-minutes');
+    if (kind !== 'refresh' && (windowInput.value === '' || !windowInput.validity.valid)) {
+      throw new Error('请填写 0 至 525600 的整数分钟；0 表示不限时间');
+    }
+    state.ops = await opsRequest('/api/ops/start', { kind, term: $('#ops-term').value,
+      recentMinutes: kind === 'refresh' ? 60 : windowInput.valueAsNumber });
     renderOps();
   } catch (error) {
     state.opsFlash = error.message;

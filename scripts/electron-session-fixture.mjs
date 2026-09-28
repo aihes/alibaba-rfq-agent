@@ -3,8 +3,8 @@ import { app, session } from "electron";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { AlibabaSessionBackup } from "../desktop/alibaba-session-backup.js";
-import { RFQ_PARTITION } from "../desktop/embedded-browser.js";
+import { AlibabaSessionBackup } from "../src/desktop/alibaba-session-backup.js";
+import { RFQ_PARTITION } from "../src/desktop/embedded-browser.js";
 
 const root = process.env.RFQ_SESSION_SMOKE_DIR;
 const phase = process.env.RFQ_SESSION_SMOKE_PHASE;

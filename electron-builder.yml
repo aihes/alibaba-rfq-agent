@@ -2,7 +2,7 @@ appId: com.rfq.assistant
 productName: RFQ助手
 asar: false
 npmRebuild: false
-afterPack: ./desktop/after-pack.cjs
+afterPack: ./src/desktop/after-pack.cjs
 directories:
   output: dist/desktop
 files:
@@ -10,8 +10,6 @@ files:
   # 私有 data、.env、测试和开发笔记均不进入安装包。
   - package.json
   - src/**
-  - desktop/**
-  - frontend/src/**
   - config/default.json
   - config/pricing-rules.json
   - plugins/alibaba-rfq-midscene/scripts/**
@@ -28,7 +26,7 @@ files:
   - '!config/*.local.json'
 mac:
   category: public.app-category.business
-  icon: desktop/assets/icon.png
+  icon: src/desktop/assets/icon.png
   # 无 Developer ID 的本地测试使用 ad-hoc 签名进行运行和通知验证。
   # 对外分发仍需 Developer ID 与公证，ad-hoc 不代表已通过 Gatekeeper。
   identity: '-'
@@ -40,7 +38,7 @@ dmg:
   title: RFQ助手
 win:
   signExecutable: false
-  icon: desktop/assets/icon.png
+  icon: src/desktop/assets/icon.png
   target: nsis
   artifactName: 'RFQ-Assistant-${version}-win-${arch}.${ext}'
 nsis:

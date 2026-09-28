@@ -5,11 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { createCaseServer } from "../desktop/server.js";
-import { DesktopSettings } from "../desktop/settings.js";
-import { OperatorConsole } from "../desktop/console.js";
+import { createCaseServer } from "../src/desktop/server.js";
+import { DesktopSettings } from "../src/desktop/settings.js";
+import { OperatorConsole } from "../src/desktop/console.js";
 import { callModelHttp } from "../src/model-http.js";
-import { importCaseData } from "../desktop/import-data.js";
+import { importCaseData } from "../src/desktop/import-data.js";
 import { notifyOpportunity } from "../src/notifications.js";
 const resources = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const temporary = () => fs.mkdtempSync(path.join(os.tmpdir(), "rfq-desktop-test-"));
@@ -124,7 +124,7 @@ test("console requires saved model and respects scan/quote authorization and con
     fs.mkdirSync(path.join(root, "data/case-catalog/ops"), { recursive: true });
     fs.writeFileSync(path.join(root, "data/case-catalog/ops/settings.json"), JSON.stringify({ browserEnabled: false }));
     const c = new OperatorConsole({ resources, workspace: root, desktop: true, spawnProcess: () => assert.fail("must not run") });
-    const request = { kind: "once", term: c.searchTerms[0], limit: 1 };
+    const request = { kind: "once", term: c.searchTerms[0], recentMinutes: 60 };
     assert.equal(c.settings.browserEnabled, true);
     assert.throws(() => c.start(request), /API Key/);
     c.probe = {}; assert.throws(() => c.start(request), /环境检测/); c.probe = null;
@@ -178,7 +178,7 @@ test("stopping an owned task escalates a stubborn process and records stopped st
   fs.writeFileSync(path.join(fakeResources, "scripts/build_case_catalog.mjs"), 'console.log(JSON.stringify({ok:true}));');
   const c = new OperatorConsole({ resources: fakeResources, workspace: root });
   try {
-    c.start({ kind: "watch", term: c.searchTerms[0], limit: 1 });
+    c.start({ kind: "watch", term: c.searchTerms[0], recentMinutes: 60 });
     const pid = c.process.pid;
     for (let i = 0; i < 40 && !c.tail().includes("ready"); i++) await new Promise((resolve) => setTimeout(resolve, 25));
     assert.match(c.tail(), /ready/); c.stop();

@@ -23,7 +23,7 @@ if (command === "status") {
 } else if (command === "scan") {
   output = await scanRfqs({
     searchTerm: option("term"),
-    maxCards: Number(option("max", "20"))
+    recentMinutes: Number(option("recent-minutes", process.env.RECENT_RFQ_MINUTES || "60"))
   });
 } else if (command === "analyze") {
   const inputPath = option("rfq-file");

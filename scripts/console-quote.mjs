@@ -71,6 +71,7 @@ function review(draftId) {
     rfq: { id: rfq.id || "", title: rfq.title || "", buyer: rfq.country || "", buyerText: rfq.buyerText || "",
       detailUrl: buyerRfqUrl(rfq.detailUrl),
       summary: rfq.summary || "", detailText: rfq.detailText || "", publishedText: rfq.publishedText || "",
+      publishedAt: rfq.publishedAt || null,
       searchTerm: rfq.searchTerm || "", collectedAt: rfq.collectedAt || null,
       quantityText: rfq.quantityText || "", remainingQuotes: rfq.remainingQuotes },
     analysis: { categoryId: record.analysis?.categoryId || "", confidence: record.analysis?.confidence ?? null,

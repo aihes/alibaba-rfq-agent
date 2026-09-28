@@ -24,7 +24,7 @@ except ModuleNotFoundError:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FRONTEND = ROOT / "frontend/src"
+FRONTEND = ROOT / "src/frontend"
 CATALOG_FILE = ROOT / "data/case-catalog/cases.json"
 ARCHIVE = ROOT / "data/reference-materials/2026-09-23-dingtalk/9.23报价模版收集.zip"
 DEFAULT_PORT = 8888

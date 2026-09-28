@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { findLocalClaudeExecutable, pickModelEnvironment, resolveEnvironmentModel } from "./model-environment.js";
-import { glmApiOrigin, glmOcrUrl, resolveGlmCredential, DEFAULT_GLM_OCR_URL } from "../src/glm-credentials.js";
+import { glmApiOrigin, glmOcrUrl, resolveGlmCredential, DEFAULT_GLM_OCR_URL } from "../glm-credentials.js";
 
 export const defaults = {
   modelConfigSource: "auto", agentProvider: "local-claude-sdk", modelName: "glm-5.3",

@@ -50,12 +50,12 @@ class ConsoleTest(unittest.TestCase):
                 console.start({"kind": "submit"})
             with self.assertRaisesRegex(ConsoleError, "已配置"):
                 console.start({"kind": "scan", "term": "$(malicious)"})
-            console.start({"kind": "scan", "term": "paper shopping bag", "limit": 2})
-            self.assertEqual(captured["command"][-5:], ["scan", "--term", "paper shopping bag", "--max", "10"])
+            console.start({"kind": "scan", "term": "paper shopping bag", "recentMinutes": 120})
+            self.assertEqual(captured["command"][-5:], ["scan", "--term", "paper shopping bag", "--recent-minutes", "120"])
             self.assertEqual(captured["env"]["AUTO_CONTACT_MODE"], "off")
             self.assertEqual(captured["env"]["ALLOW_LIVE_SUBMIT"], "false")
             self.assertEqual(captured["env"]["SEARCH_TERMS"], "paper shopping bag")
-            self.assertEqual(captured["env"]["MAX_NEW_RFQS_PER_CYCLE"], "2")
+            self.assertEqual(captured["env"]["RECENT_RFQ_MINUTES"], "120")
             for _ in range(100):
                 if console.snapshot()["run"]["status"] != "running":
                     break

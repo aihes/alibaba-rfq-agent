@@ -130,7 +130,7 @@ const manifest = {
     browserProvider: "chrome-bridge",
     searchTerms: config.searchTerms,
     pollIntervalSeconds: config.pollIntervalSeconds,
-    maxNewRfqsPerCycle: config.maxNewRfqsPerCycle,
+    recentRfqMinutes: config.recentRfqMinutes,
     autoContactMode: config.autoContactMode,
     allowLiveSubmit: config.allowLiveSubmit,
     autoContactAckValid: config.autoContactAck === "I_UNDERSTAND_AUTO_QUOTES_ARE_SENT",

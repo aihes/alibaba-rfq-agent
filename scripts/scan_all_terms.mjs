@@ -21,9 +21,9 @@ export function scanAllTerms({ run = spawnSync, log = console.log, error = conso
   const cli = path.join(root, "plugins/alibaba-rfq-midscene/scripts/cli.mjs");
   for (const [index, term] of searchTerms.entries()) {
     const stage = reportProgress("search", `正在扫描品类：${term}`, { categoryIndex: index + 1, categoryTotal: searchTerms.length },
-      { searchTerm: term, maxCards: 10 });
+      { searchTerm: term, recentMinutes: Number(process.env.RECENT_RFQ_MINUTES ?? 60) });
     log(`[case-console] Scanning category: ${term}`);
-    const result = run(process.execPath, [cli, "scan", "--term", term, "--max", "10"], {
+    const result = run(process.execPath, [cli, "scan", "--term", term], {
       cwd: root,
       stdio: "inherit",
       // 子进程继承父进程组，总开关关闭时 Python 可以一次停止整组。

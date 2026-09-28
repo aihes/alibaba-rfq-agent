@@ -9,6 +9,7 @@ import { priceRfq } from "./pricing.js";
 import { notifyOpportunity } from "./notifications.js";
 import { reportProgress, reportProgressResult } from "./progress.js";
 import { appendJsonl, loadState, saveState, sleep, writeJson } from "./utils.js";
+import { publishedWithinMinutes } from "./rfq-time.js";
 
 export async function runCycle(config) {
   const cycleStartedAt = new Date().toISOString();
@@ -20,25 +21,30 @@ export async function runCycle(config) {
   try {
     for (const [index, searchTerm] of config.searchTerms.entries()) {
       const searchStage = reportProgress("search", `正在搜索：${searchTerm}`, { categoryIndex: index + 1, categoryTotal: config.searchTerms.length },
-        { searchTerm, maxCards: config.maxCardsPerSearch });
+        { searchTerm, recentRfqMinutes: config.recentRfqMinutes });
       const cards = await collectSearchPage(page, config, searchTerm);
-      reportProgressResult(searchStage, { count: cards.length, cards: cards.map(({ id, title, summary, quantityText, country }) =>
-        ({ id, title, summary, quantityText, country })) });
+      reportProgressResult(searchStage, { count: cards.length, cards: cards.map(({ id, title, summary, quantityText, country, publishedText, publishedAt }) =>
+        ({ id, title, summary, quantityText, country, publishedText, publishedAt })) });
       collected.push(...cards);
       await sleep(config.navigationDelayMs);
     }
 
     const unique = [...new Map(collected.map((rfq) => [rfq.id, rfq])).values()];
-    const candidates = unique
+    // 每张卡片的相对发布时间以它被读取的时刻为基准；跨多个品类的
+    // 一轮扫描可能持续很久，不能再用整轮开始时间判断它是否够新。
+    const recent = unique.filter((rfq) => publishedWithinMinutes(rfq, config.recentRfqMinutes, new Date(rfq.collectedAt)));
+    const candidates = recent
       .filter((rfq) => !state.seen[rfq.id])
       .map((rfq) => ({ rfq, prefilter: keywordPrefilter(rfq, config.supportedCategories) }))
-      .filter((entry) => entry.prefilter.length > 0)
-      .slice(0, config.maxNewRfqsPerCycle);
+      .filter((entry) => entry.prefilter.length > 0);
     const filterStage = reportProgress("filter", `扫描到 ${unique.length} 条 RFQ，${candidates.length} 条进入分析`,
       { itemIndex: 0, itemTotal: candidates.length },
-      { scanned: collected.length, unique: unique.length, previouslySeen: Object.keys(state.seen).length, maxNew: config.maxNewRfqsPerCycle });
+      { scanned: collected.length, unique: unique.length, recent: recent.length,
+        unknownPublishedAt: unique.filter((rfq) => !rfq.publishedAt).length,
+        recentRfqMinutes: config.recentRfqMinutes, previouslySeen: Object.keys(state.seen).length });
     reportProgressResult(filterStage, { candidates: candidates.map(({ rfq, prefilter }) =>
-      ({ id: rfq.id, title: rfq.title, summary: rfq.summary, prefilter })) });
+      ({ id: rfq.id, title: rfq.title, summary: rfq.summary, publishedText: rfq.publishedText,
+        publishedAt: rfq.publishedAt, prefilter })) });
 
     const records = [];
     for (const [index, { rfq, prefilter }] of candidates.entries()) {

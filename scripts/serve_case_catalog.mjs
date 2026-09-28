@@ -1,4 +1,4 @@
-import { createCaseServer } from "../desktop/server.js";
+import { createCaseServer } from "../src/desktop/server.js";
 import { projectDir, resourceDir } from "../src/config.js";
 
 const i = process.argv.indexOf("--port");

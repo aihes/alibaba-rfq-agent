@@ -8,8 +8,7 @@
     "cloth bag",
     "folding carton box"
   ],
-  "maxCardsPerSearch": 30,
-  "maxNewRfqsPerCycle": 12,
+  "recentRfqMinutes": 60,
   "navigationDelayMs": 1200,
   "supportedCategories": {
     "kraft_food_bag": {

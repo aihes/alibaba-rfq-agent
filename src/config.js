@@ -4,6 +4,7 @@ import path from "node:path";
 import dotenv from "dotenv";
 import { resolveGlmCredential, glmOcrUrl, DEFAULT_GLM_OCR_URL } from "./glm-credentials.js";
 import { projectDir } from "./paths.js";
+import { parseRecentMinutes } from "./rfq-time.js";
 export { projectDir, resourceDir } from "./paths.js";
 
 // 桌面模型由主进程读取白名单环境变量/设置。不加载项目 .env，
@@ -57,8 +58,7 @@ export function loadConfig() {
   return {
     ...defaults,
     searchTerms: parseList(process.env.SEARCH_TERMS, defaults.searchTerms),
-    maxCardsPerSearch: Number(process.env.MAX_CARDS_PER_SEARCH || defaults.maxCardsPerSearch),
-    maxNewRfqsPerCycle: Number(process.env.MAX_NEW_RFQS_PER_CYCLE || defaults.maxNewRfqsPerCycle),
+    recentRfqMinutes: parseRecentMinutes(process.env.RECENT_RFQ_MINUTES ?? defaults.recentRfqMinutes),
     navigationDelayMs: Number(process.env.NAVIGATION_DELAY_MS || defaults.navigationDelayMs),
     pricing: readJson("config/pricing-rules.json"),
     browserProvider: process.env.RFQ_DESKTOP === "1" ? "electron-cdp" : (process.env.BROWSER_PROVIDER || "chrome-bridge"),

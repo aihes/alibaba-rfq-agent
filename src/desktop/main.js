@@ -13,7 +13,8 @@ import { createNativeNotifier } from "./native-notifications.js";
 import { EmbeddedBrowser, RFQ_PARTITION } from "./embedded-browser.js";
 import { AlibabaSessionBackup } from "./alibaba-session-backup.js";
 
-const resources = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// 源码位于 src/desktop；开发态与安装包都以项目/app 根目录作为资源根。
+const resources = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 app.setName("RFQ 助手");
 // 测试可以使用独立数据目录。发布版默认使用操作系统的应用数据目录。
 if (process.env.RFQ_DESKTOP_DATA_DIR) app.setPath("userData", path.resolve(process.env.RFQ_DESKTOP_DATA_DIR));
@@ -131,7 +132,7 @@ else {
     window.webContents.setWindowOpenHandler(({ url }) => { if (externalAllowed(url) && !service.console.current) void embeddedBrowser.open(url).catch(() => {}); return { action: "deny" }; });
     window.webContents.on("will-navigate", (event, url) => { if (new URL(url).origin !== new URL(service.url).origin) event.preventDefault(); });
     window.on("close", (event) => { if (!quitting) { event.preventDefault(); window.hide(); } });
-    const icon = nativeImage.createFromPath(path.join(resources, "desktop/assets/icon.png")).resize({ width: 18, height: 18 });
+    const icon = nativeImage.createFromPath(path.join(resources, "src/desktop/assets/icon.png")).resize({ width: 18, height: 18 });
     tray = new Tray(icon); tray.setToolTip("RFQ 助手 · 关闭窗口后继续运行");
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: "打开 RFQ 助手", click: () => show() },

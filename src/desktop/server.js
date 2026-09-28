@@ -5,8 +5,8 @@ import os from "node:os";
 import AdmZip from "adm-zip";
 import { OperatorConsole } from "./console.js";
 import { BrowserExtension } from "./extension.js";
-import { createNotificationTools } from "../src/notification-tools.js";
-import { readQuoteImage } from "../src/quote-images.js";
+import { createNotificationTools } from "../notification-tools.js";
+import { readQuoteImage } from "../quote-images.js";
 
 const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp" };
 const csp = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
@@ -109,7 +109,7 @@ export async function createCaseServer(options) {
           // 只有显式点击才实际调用模型。失败结果也记入本次进程的环境状态；
           // GET 环境检查永远不触发付费请求。
           try {
-          const { callModelHttp } = await import("../src/model-http.js");
+          const { callModelHttp } = await import("../model-http.js");
           const v = desktopSettings.resolved().value;
           let data;
           if (v.agentProvider === "local-claude-sdk") {
@@ -117,7 +117,7 @@ export async function createCaseServer(options) {
             if (!env.LOCAL_CLAUDE_EXECUTABLE) throw new Error("未找到本机 Claude，请安装或切换 GLM HTTP");
             if (testLocalClaude) data = await testLocalClaude(env);
             else {
-              const { runLocalAgentJson } = await import("../src/local-agent.js");
+              const { runLocalAgentJson } = await import("../local-agent.js");
               const sdk = await runLocalAgentJson({ localClaudeExecutable: env.LOCAL_CLAUDE_EXECUTABLE,
                 localClaudeModel: env.LOCAL_CLAUDE_MODEL, localClaudeSettingSources: [],
                 localClaudeStructuredOutput: false, localClaudeTimeoutMs: 120000, localClaudeMaxBudgetUsd: 0.05,
@@ -127,7 +127,7 @@ export async function createCaseServer(options) {
                 schema: { type: "object", additionalProperties: false, required: ["ok"], properties: { ok: { type: "boolean" } } } });
               data = sdk.data;
             }
-          } else if (v.agentProvider === "anthropic-http") data = await (await import("../src/claude.js"))
+          } else if (v.agentProvider === "anthropic-http") data = await (await import("../claude.js"))
             .callAnthropicHttp({ anthropicApiKey: v.modelApiKey, anthropicModel: v.modelName, anthropicApiUrl: v.modelApiUrl }, "Return JSON only: {\"ok\":true}", { test: true }, 256);
           else data = await callModelHttp({ modelApiKey: v.modelApiKey, modelApiUrl: v.modelApiUrl, modelName: v.modelName }, "Return JSON only: {\"ok\":true}", { test: true }, 256);
           if (data.ok !== true) throw new Error("模型返回格式不符合要求");
@@ -148,7 +148,7 @@ export async function createCaseServer(options) {
             if (testOcr) ocr = await testOcr(env);
             else {
               const { default: sharp } = await import("sharp");
-              const { extractImageText } = await import("../src/ocr.js");
+              const { extractImageText } = await import("../ocr.js");
               const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rfq-ocr-check-"));
               try {
                 // 固定样张只含测试文字，不上传用户 RFQ 或浏览器内容。
@@ -174,7 +174,7 @@ export async function createCaseServer(options) {
       }
       if (req.method !== "GET") return fail(405, "请求方法不支持");
       if (["/", "/app.js", "/styles.css"].includes(route)) {
-        const file = path.join(resources, "frontend/src", route === "/" ? "index.html" : route.slice(1));
+        const file = path.join(resources, "src/frontend", route === "/" ? "index.html" : route.slice(1));
         return reply(200, fs.readFileSync(file), mime[path.extname(file)]);
       }
       if (route === "/api/desktop/info") return reply(200, { desktop: Boolean(desktopSettings), workspace,

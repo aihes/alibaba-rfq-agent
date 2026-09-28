@@ -2,7 +2,7 @@
 // 转为本应用数据目录里的 AES-GCM 备份。不会打印 Cookie 或调用网站。
 import { app, safeStorage } from "electron";
 import path from "node:path";
-import { migrateLegacySessionBackup } from "../desktop/alibaba-session-backup.js";
+import { migrateLegacySessionBackup } from "../src/desktop/alibaba-session-backup.js";
 
 const directory = process.env.RFQ_DESKTOP_DATA_DIR;
 if (!directory || !path.isAbsolute(directory)) throw new Error("RFQ_DESKTOP_DATA_DIR must be absolute");

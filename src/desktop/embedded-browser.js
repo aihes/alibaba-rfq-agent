@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ALIBABA_LOGIN_EVIDENCE_EXPRESSION, alibabaLoginStatus } from "../src/browser.js";
+import { ALIBABA_LOGIN_EVIDENCE_EXPRESSION, alibabaLoginStatus } from "../browser.js";
 import { importAlibabaCookies } from "./browser-import.js";
 
 export const RFQ_HOME = "https://sourcing.alibaba.com/rfq_search_list.htm";

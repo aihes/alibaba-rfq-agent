@@ -274,7 +274,7 @@ class OperatorConsole:
                 raise ConsoleError("当前草稿不允许报价：" + "；".join(review[reasons_key]))
             kind = "quote_" + request["kind"]
             run = {"id": uuid.uuid4().hex[:12], "kind": kind, "draftId": draft_id,
-                   "rfqId": review["rfq"]["id"], "term": None, "limit": None,
+                   "rfqId": review["rfq"]["id"], "term": None, "recentMinutes": None,
                    "status": "running", "startedAt": now(), "finishedAt": None, "exitCode": None, "alert": None}
             self.ops_dir.mkdir(parents=True, exist_ok=True)
             environment = os.environ.copy()
@@ -301,7 +301,7 @@ class OperatorConsole:
             threading.Thread(target=self._watch, args=(process, run), daemon=True).start()
         return self.snapshot()
 
-    def _command(self, kind, term, limit):
+    def _command(self, kind, term, recent_minutes):
         node = shutil.which("node")
         if not node:
             raise ConsoleError("未找到 Node.js")
@@ -313,7 +313,7 @@ class OperatorConsole:
                 # 用参数数组交给 Node 顺序执行，不经过 shell。任一品类失败
                 # 就保留该退出码并停止，不能让后续成功覆盖验证码/登录失败。
                 return [node, str(self.root / "scripts/scan_all_terms.mjs")]
-            return [node, cli, "scan", "--term", term, "--max", "10"]
+            return [node, cli, "scan", "--term", term, "--recent-minutes", str(recent_minutes)]
         if kind in ("once", "watch"):
             return [node, str(self.root / "src/cli.js"), kind]
         raise ConsoleError("不支持的操作")
@@ -327,24 +327,24 @@ class OperatorConsole:
         term = request.get("term", SEARCH_TERMS[0])
         if type(term) is not str or term not in [*SEARCH_TERMS, ALL_TERMS]:
             raise ConsoleError("搜索词必须来自已配置品类")
-        limit = request.get("limit", 1)
-        if type(limit) is not int or not 1 <= limit <= 3:
-            raise ConsoleError("每轮新 RFQ 数量仅支持 1–3")
+        recent_minutes = request.get("recentMinutes", 60)
+        if type(recent_minutes) is not int or not 0 <= recent_minutes <= 525600:
+            raise ConsoleError("发布时间范围须为 0–525600 分钟")
         with self.lock:
             if self.current is not None:
                 raise ConsoleError("已有任务正在运行，请先停止")
             if self._env_process is not None:
                 raise ConsoleError("环境检测正在进行，请等待检测完成")
-            command = self._command(kind, term, limit)
+            command = self._command(kind, term, recent_minutes)
             run = {"id": uuid.uuid4().hex[:12], "kind": kind, "term": term if kind in {"scan", "once", "watch"} else None,
-                   "limit": limit if kind in {"once", "watch"} else None, "status": "running", "startedAt": now(),
+                   "recentMinutes": recent_minutes if kind in {"scan", "once", "watch"} else None, "status": "running", "startedAt": now(),
                    "finishedAt": None, "exitCode": None, "alert": None}
             self.ops_dir.mkdir(parents=True, exist_ok=True)
             environment = os.environ.copy()
             # quoteEnabled 只授权逐单工作台；扫描/分析/监控始终产出草稿，
             # 不能通过模式切换或继承的 .env 自动回填/发送未来的 RFQ。
             environment.update({"AUTO_CONTACT_MODE": "off", "ALLOW_LIVE_SUBMIT": "false", "AUTO_CONTACT_ACK": "",
-                                "MAX_NEW_RFQS_PER_CYCLE": str(limit), "MAX_CARDS_PER_SEARCH": "10"})
+                                "RECENT_RFQ_MINUTES": str(recent_minutes)})
             # 显式覆盖“全部”也很必要：删除 shell 变量还会让 dotenv 重新
             # 注入 .env 中的子集。这里用配置的完整列表覆盖这两种来源。
             environment["SEARCH_TERMS"] = ",".join(SEARCH_TERMS) if term == ALL_TERMS else term

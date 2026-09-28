@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 
-const html = fs.readFileSync(new URL("../frontend/src/index.html", import.meta.url), "utf8");
-const source = fs.readFileSync(new URL("../frontend/src/app.js", import.meta.url), "utf8");
+const html = fs.readFileSync(new URL("../src/frontend/index.html", import.meta.url), "utf8");
+const source = fs.readFileSync(new URL("../src/frontend/app.js", import.meta.url), "utf8");
 
 for (const monitorPresent of [true, false]) {
   test(`starting a quote stays successful with monitor ${monitorPresent ? "present" : "absent"}`, async () => {

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import vm from "node:vm";
 import { EventEmitter } from "node:events";
-import { EmbeddedBrowser, alibabaNavigationAllowed, shareableBrowserUrl, RFQ_PARTITION, RFQ_HOME } from "../desktop/embedded-browser.js";
+import { EmbeddedBrowser, alibabaNavigationAllowed, shareableBrowserUrl, RFQ_PARTITION, RFQ_HOME } from "../src/desktop/embedded-browser.js";
 
 test("copyable tab URLs include RFQ IDs but never login tickets or arbitrary sites", () => {
   assert.equal(shareableBrowserUrl("https://sourcing.alibaba.com/rfq_detail.htm?p=fixture"), "https://sourcing.alibaba.com/rfq_detail.htm?p=fixture");
@@ -14,10 +14,10 @@ test("copyable tab URLs include RFQ IDs but never login tickets or arbitrary sit
     "https://sourcing.alibaba.com/rfq_detail.htm?session_id=private", "https://alibaba.com.attacker.test/rfq_detail.htm?p=fixture"])
     assert.equal(shareableBrowserUrl(url), null);
 });
-import { createCaseServer } from "../desktop/server.js";
+import { createCaseServer } from "../src/desktop/server.js";
 import { connectElectronBrowser } from "../src/electron-browser.js";
 import { connectBrowser, assertAlibabaReady, alibabaLoginStatus } from "../src/browser.js";
-import { parseAlibabaLoginFile } from "../desktop/browser-import.js";
+import { parseAlibabaLoginFile } from "../src/desktop/browser-import.js";
 
 class FakeWindow extends EventEmitter {
   constructor(options) {

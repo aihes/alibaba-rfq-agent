@@ -42,7 +42,7 @@ flowchart LR
   W --> N[已有系统通知接口]
 ```
 
-- 主进程：`desktop/embedded-browser.js` 管理一个浏览器窗口；本地工具栏使用窗口自身页面，
+- 主进程：`src/desktop/embedded-browser.js` 管理一个浏览器窗口；本地工具栏使用窗口自身页面，
   Alibaba 页面置于独立 `WebContentsView` 中。工具栏只接收过滤后的标题和链接，不接触网页 DOM 或登录存储。
 - 会话：`persist:rfq-alibaba`，与工作台默认 session 分开，保存在操作系统
   应用数据目录。Chromium 持久化有过期时间的 Cookie 和站点存储；对重启
@@ -50,7 +50,7 @@ flowchart LR
   Alibaba Cookie，并在首次导航前恢复；密钥文件和备份仅当前系统用户
   可读。网站注销会更新备份，退出时主动写盘。状态不包含 Cookie 值。
   浏览器任务不读取认证存储。
-  用户主动导入通过 `desktop/browser-import.js` 和原生文件选择框写入此专用会话，
+  用户主动导入通过 `src/desktop/browser-import.js` 和原生文件选择框写入此专用会话，
   失败回滚只读取应用自己的记录，不访问原 Chrome 的认证数据库。
 - CDP：原生 `webContents.debugger.attach/sendCommand`，未设置
   `remote-debugging-port`。当前实现使用确定性 DOM 操作，不依赖 Chrome

@@ -10,10 +10,10 @@ import http from "node:http";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { EmbeddedBrowser } from "../desktop/embedded-browser.js";
+import { EmbeddedBrowser } from "../src/desktop/embedded-browser.js";
 import { connectElectronBrowser } from "../src/electron-browser.js";
-import { DesktopSettings } from "../desktop/settings.js";
-import { parseAlibabaLoginFile } from "../desktop/browser-import.js";
+import { DesktopSettings } from "../src/desktop/settings.js";
+import { parseAlibabaLoginFile } from "../src/desktop/browser-import.js";
 const resources = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "rfq-electron-smoke-"));
 app.setPath("userData", path.join(root, "electron-data"));
@@ -25,19 +25,23 @@ const cleanup = async () => { await service?.close(); b?.close(); ui?.destroy();
 for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => { void cleanup().then(() => app.exit(0)); });
 app.whenReady().then(async () => {
   try {
-    const { createCaseServer } = await import("../desktop/server.js");
+    const { createCaseServer } = await import("../src/desktop/server.js");
     const { fillQuotePage, submissionToken } = await import("../src/form.js");
     const { collectSearchPage, hydrateDetail } = await import("../src/collector.js");
     // 公开页也会显示 My Alibaba；fixture 明确提供退出入口，才代表
     // 已登录。这与内置浏览器的账号导航检测规则保持一致。
-    let html = fs.readFileSync(path.join(resources, "tests/fixtures/quote-form.html"), "utf8").replace("<main>", `<main><p>My Alibaba</p><a href="/logout">Log out</a>
+    const html = fs.readFileSync(path.join(resources, "tests/fixtures/quote-form.html"), "utf8").replace("<main>", `<main><p>My Alibaba</p><a href="/logout">Log out</a>
       <article class="alife-bc-brh-rfq-list__item">
         <a class="brh-rfq-item__subject-link" href="/rfq_detail.htm?p=fixture">Fixture corrugated carton box</a>
         <p class="brh-rfq-item__detail">500 B flute cartons</p><p class="brh-rfq-item__quantity">500 Pieces</p>
-        <p class="brh-rfq-item__country">Ukraine</p><p class="brh-rfq-item__quote-left">6</p>
+        <p class="brh-rfq-item__country">Ukraine</p><p class="brh-rfq-item__quote-left">6</p><p class="brh-rfq-item__publishtime">15 minutes ago</p>
         <a href="/rfq_quotation_post.htm">Quote</a>
-      </article><div class="rfq-detail-info-body">Fixture B flute carton, 310x235x165mm</div>`);
-    fixture = http.createServer((_req, res) => { res.writeHead(200, { "Content-Type": "text/html" }); res.end(html); });
+      </article><nav class="pagination"><a href="/quote?SearchText=carton&page=2">Next</a></nav>
+      <div class="rfq-detail-info-body">Fixture B flute carton, 310x235x165mm</div>`);
+    const secondPage = html.replace("Fixture corrugated carton box", "Fixture second page carton box")
+      .replace("p=fixture", "p=fixture-second").replace(/<nav class="pagination">.*?<\/nav>/, "");
+    fixture = http.createServer((req, res) => { res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(new URL(req.url, "http://localhost").searchParams.get("page") === "2" ? secondPage : html); });
     await new Promise((resolve) => fixture.listen(0, "127.0.0.1", resolve));
     const home = `http://127.0.0.1:${fixture.address().port}/quote`;
     const allowed = (value) => { try { return new URL(value).origin === new URL(home).origin; } catch { return false; } };
@@ -61,8 +65,11 @@ app.whenReady().then(async () => {
       environment: () => ({ ...settings.environment(), RFQ_BROWSER_URL: `${service.url}api/desktop/browser/command`, RFQ_BROWSER_TOKEN: token }), revokeBrowser: () => b.invalidate() });
     const config = { electronBrowserUrl: `${service.url}api/desktop/browser/command`, electronBrowserToken: token, allowLiveSubmit: true, quotePort: "Shanghai" };
     const c = await connectElectronBrowser(config);
-    const cards = await collectSearchPage(c.page, { searchBaseUrl: home, maxCardsPerSearch: 1 }, "carton");
-    assert.equal(cards.length, 1); assert.equal(cards[0].quantity, 500); assert.equal(cards[0].remainingQuotes, 6);
+    const cards = await collectSearchPage(c.page, { searchBaseUrl: home }, "carton");
+    assert.equal(cards.length, 2); assert.equal(cards[0].quantity, 500); assert.equal(cards[0].remainingQuotes, 6);
+    assert.equal(cards[0].publishedText, "15 minutes ago");
+    assert.ok(Number.isFinite(Date.parse(cards[0].publishedAt)));
+    assert.equal(cards[1].title, "Fixture second page carton box");
     const detail = await hydrateDetail(c.page, cards[0], { navigationDelayMs: 0, maxRfqImages: 0 });
     assert.match(detail.detailText, /310x235x165mm/);
     const record = { rfq: { id: "electron-fixture", quoteUrl: home }, draft: { port: "Shanghai", productName: "Fixture carton", productDetails: "B flute", buyerMessage: "Local fixture quote only", sampleAvailable: false }, quote: { tradeTerm: "EXW", currency: "USD", quantity: 500, unitPriceUsd: 0.75, validityDays: 7 } };

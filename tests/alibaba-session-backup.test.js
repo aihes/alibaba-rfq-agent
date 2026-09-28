@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { AlibabaSessionBackup, migrateLegacySessionBackup } from "../desktop/alibaba-session-backup.js";
+import { AlibabaSessionBackup, migrateLegacySessionBackup } from "../src/desktop/alibaba-session-backup.js";
 
 test("a stalled cookie store cannot leave the desktop app without a window, and visible-browser retry restores login", async () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "rfq-session-timeout-"));

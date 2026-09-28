@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, execFile } from "node:child_process";
-import { readProgressEvents } from "../src/progress.js";
-import { setDraftArchived } from "../src/draft-archive.js";
-import { stageEvidenceFromRecord } from "../src/stage-evidence.js";
+import { readProgressEvents } from "../progress.js";
+import { setDraftArchived } from "../draft-archive.js";
+import { stageEvidenceFromRecord } from "../stage-evidence.js";
 
 const now = () => new Date().toISOString();
 const attention = /CAPTCHA|verification challenge|login is required|login could not be verified|Cannot attach to the existing Chrome session|Browser connection or Alibaba requires human attention|Chrome Bridge or Alibaba requires human attention|needs_manual_review|Submit was clicked, but success could not be verified|内置浏览器|页面操作失败/i;
@@ -287,17 +287,18 @@ export class OperatorConsole {
   }
   start(request) {
     this.assertIdle();
-    const { kind, term = this.searchTerms[0], limit = 1 } = request || {};
-    if (!["refresh", "scan", "once", "watch"].includes(kind) || ![...this.searchTerms, "__all__"].includes(term) || !Number.isInteger(limit) || limit < 1 || limit > 3) throw new Error("任务参数无效");
+    const { kind, term = this.searchTerms[0], recentMinutes = 60 } = request || {};
+    if (!["refresh", "scan", "once", "watch"].includes(kind) || ![...this.searchTerms, "__all__"].includes(term)
+      || !Number.isInteger(recentMinutes) || recentMinutes < 0 || recentMinutes > 525600) throw new Error("任务参数无效");
     if (this.desktop && ["once", "watch"].includes(kind)) {
       const env = this.environment();
       if (env.AGENT_PROVIDER === "local-claude-sdk" && !env.LOCAL_CLAUDE_EXECUTABLE) throw new Error("未找到本机 Claude，请安装后重试或在设置中选择 GLM HTTP");
       if (env.AGENT_PROVIDER !== "local-claude-sdk" && !env.MODEL_API_KEY) throw new Error("请先在模型设置中填写 API Key 并保存");
     }
     const script = kind === "refresh" ? "scripts/build_case_catalog.mjs" : kind === "scan" ? (term === "__all__" ? "scripts/scan_all_terms.mjs" : "plugins/alibaba-rfq-midscene/scripts/cli.mjs") : "src/cli.js";
-    const args = kind === "scan" && term !== "__all__" ? ["scan", "--term", term, "--max", "10"] : ["once", "watch"].includes(kind) ? [kind] : [];
-    return this.launch({ kind, term: kind === "refresh" ? null : term, limit }, script, args,
-      { SEARCH_TERMS: term === "__all__" ? this.searchTerms.join(",") : term, MAX_NEW_RFQS_PER_CYCLE: String(limit), MAX_CARDS_PER_SEARCH: "10" });
+    const args = kind === "scan" && term !== "__all__" ? ["scan", "--term", term, "--recent-minutes", String(recentMinutes)] : ["once", "watch"].includes(kind) ? [kind] : [];
+    return this.launch({ kind, term: kind === "refresh" ? null : term, recentMinutes }, script, args,
+      { SEARCH_TERMS: term === "__all__" ? this.searchTerms.join(",") : term, RECENT_RFQ_MINUTES: String(recentMinutes) });
   }
   launch(fields, script, args, extra) {
     const run = { id: crypto.randomUUID().replaceAll("-", "").slice(0, 12), ...fields, status: "running", startedAt: now(), finishedAt: null, exitCode: null, alert: null };

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSearchUrl, keywordPrefilter } from "../src/collector.js";
+import { buildSearchUrl, collectSearchPage, keywordPrefilter, nextSearchPageUrl } from "../src/collector.js";
 import { stableRfqId } from "../src/utils.js";
 
 test("builds Alibaba search URL with SearchText", () => {
@@ -32,4 +32,48 @@ test("builds a stable RFQ id when Alibaba rotates opaque URL tokens", () => {
   const different = stableRfqId({ ...card, quantityText: "200 pieces" });
   assert.equal(first, second);
   assert.notEqual(first, different);
+});
+
+test("collects every valid card across linked search pages without an order cap", async () => {
+  const baseUrl = "https://sourcing.alibaba.com/rfq_search_list.htm";
+  const firstUrl = buildSearchUrl(baseUrl, "kraft paper bag");
+  const secondUrl = `${firstUrl}&page=2`;
+  const makeCards = (start, count) => Array.from({ length: count }, (_unused, index) => {
+    const number = start + index;
+    return { title: `Kraft paper bag ${number}`, summary: "kraft paper bag", publishedText: "15 minutes ago", countryText: "United States",
+      detailUrl: `https://sourcing.alibaba.com/rfq_detail.htm?id=${number}`, quantityText: `${number} pieces` };
+  });
+  const source = new Map([[firstUrl, makeCards(1, 13)], [secondUrl, makeCards(14, 7)]]);
+  let currentUrl;
+  const visited = [];
+  const page = {
+    async goto(url) { currentUrl = url; visited.push(url); },
+    url() { return currentUrl; },
+    locator() { return { first: () => ({ waitFor: async () => {} }), evaluateAll: async () => source.get(currentUrl) }; },
+    async evaluateJson(expression) {
+      if (expression.includes("const elements = Array.from(document.querySelectorAll")) {
+        return { next: currentUrl === firstUrl ? [{ href: secondUrl }] : [], numeric: [] };
+      }
+      return { body: "", logoutEntry: true, loginEntry: false };
+    }
+  };
+  const cards = await collectSearchPage(page, { searchBaseUrl: baseUrl, navigationDelayMs: 0 }, "kraft paper bag");
+  assert.deepEqual(visited, [firstUrl, secondUrl]);
+  assert.equal(cards.length, 20);
+  assert.equal(new Set(cards.map(({ id }) => id)).size, 20);
+  assert.equal(cards[19].title, "Kraft paper bag 20");
+  assert.equal(cards[19].publishedText, "15 minutes ago");
+  assert.ok(Number.isFinite(Date.parse(cards[19].publishedAt)));
+  assert.ok(Number.isFinite(Date.parse(cards[19].collectedAt)));
+});
+
+test("numeric pagination uses the marked current page and rejects an unreadable next page", async () => {
+  const url = buildSearchUrl("https://sourcing.alibaba.com/rfq_search_list.htm", "bag");
+  const page = { evaluateJson: async () => ({ next: [], numeric: [
+    { number: 1, active: true, href: "", disabled: false },
+    { number: 2, active: false, href: `${url}&page=2`, disabled: false }
+  ] }) };
+  assert.equal(await nextSearchPageUrl(page, url, "bag"), `${url}&page=2`);
+  page.evaluateJson = async () => ({ next: [{ href: "javascript:nextPage()" }], numeric: [] });
+  await assert.rejects(nextSearchPageUrl(page, url, "bag"), /未完成全部扫描/);
 });

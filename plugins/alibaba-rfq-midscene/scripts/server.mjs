@@ -22,6 +22,7 @@ const rfqSchema = z.object({
   remainingQuotesText: z.string().default(""),
   remainingQuotes: z.number().nullable().optional(),
   publishedText: z.string().default(""),
+  publishedAt: z.string().nullable().optional(),
   buyerText: z.string().default(""),
   cardImageUrl: z.string().default(""),
   detailUrl: z.string().url(),
@@ -60,7 +61,7 @@ server.registerTool("midscene_scan_rfqs", {
   description: "Search and extract Alibaba RFQ cards from the logged-in browser. This is read-only.",
   inputSchema: {
     searchTerm: z.string().min(1),
-    maxCards: z.number().int().min(1).max(30).default(20)
+    recentMinutes: z.number().int().min(0).max(525600).optional().describe("Buyer publication window in minutes; 0 scans all dates")
   },
   annotations: { readOnlyHint: true }
 }, guarded(scanRfqs));

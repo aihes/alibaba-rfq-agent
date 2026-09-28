@@ -155,9 +155,9 @@
               <div class="ops-heading"><span>02 / SCAN</span><h3>RFQ 扫描</h3></div>
               <div class="ops-fields">
                 <label>监控品类<select id="ops-term"></select></label>
-                <label>每轮新 RFQ 上限<select id="ops-limit"><option value="1">1 条</option><option value="2">2 条</option><option value="3">3 条</option></select></label>
+                <label>最近 N 分钟内发布<input id="ops-recent-minutes" type="number" min="0" max="525600" step="1" value="60" inputmode="numeric" aria-describedby="scan-window-help"></label>
               </div>
-              <p class="ops-help">「只扫描」仅发现新需求；「运行一轮分析」对照规则生成报价草稿；「持续监控」按配置轮询自动执行。</p>
+              <p id="scan-window-help" class="ops-help">读取搜索结果的全部页面；只分析发布时间在最近 N 分钟内的新 RFQ。填 0 表示不限发布时间。无法识别发布时间的 RFQ 只在不限时间时进入分析。</p>
               <div class="ops-actions">
                 <span class="ops-action-wrap"><button type="button" data-action="scan" class="light">只扫描 RFQ</button></span>
                 <span class="ops-action-wrap"><button type="button" data-action="once" class="primary">运行一轮分析</button></span>

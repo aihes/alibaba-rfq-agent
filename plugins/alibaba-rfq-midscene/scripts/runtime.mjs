@@ -12,6 +12,7 @@ import { fillQuoteForm, submissionToken } from "../../../src/form.js";
 import { priceRfq } from "../../../src/pricing.js";
 import { reportProgress, reportProgressResult } from "../../../src/progress.js";
 import { parseNumber, stableRfqId, writeJson } from "../../../src/utils.js";
+import { publishedWithinMinutes } from "../../../src/rfq-time.js";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 export const pluginDir = path.resolve(scriptDir, "..");
@@ -82,7 +83,9 @@ export function writeRunReport(runId) {
     `- 扫描时间：\`${scan.recordedAt}\``,
     `- 浏览器模式：\`${scan.browserMode}\`（\`${scan.provider}\`）`,
     `- 搜索词：\`${scan.searchTerm}\``,
-    `- 页面提取数量：\`${scan.count}\``,
+    `- 页面提取数量：\`${scan.scannedCount ?? scan.count}\``,
+    `- 发布时间范围：\`${scan.recentMinutes === 0 ? "不限" : `最近 ${scan.recentMinutes ?? "未记录"} 分钟`}\``,
+    `- 范围内数量：\`${scan.count}\``,
     `- 完整分析/报价数量：\`${quotes.length}\``,
     ...(lark?.url ? [`- Lark 文档：[${lark.title || "查看云端报告"}](${lark.url})`] : []),
     "",
@@ -90,7 +93,8 @@ export function writeRunReport(runId) {
     "",
     "| 指标 | 结果 |",
     "|---|---:|",
-    `| 实际扫描 RFQ | ${scan.count} |`,
+    `| 实际扫描 RFQ | ${scan.scannedCount ?? scan.count} |`,
+    `| 发布时间范围内 | ${scan.count} |`,
     `| 完整分析/报价 | ${quotes.length} |`,
     `| 已向买家提交 | ${quotes.filter((item) => item.record?.submission?.status === "submitted").length} |`,
     "",
@@ -98,9 +102,9 @@ export function writeRunReport(runId) {
     "",
     "## 实际扫描到的 RFQ",
     "",
-    "| # | RFQ ID | 标题 | 数量 | 国家/地区 | 剩余席位 | 买家 | 页面 |",
-    "|---:|---|---|---:|---|---:|---|---|",
-    ...scan.rfqs.map((rfq, index) => `| ${index + 1} | \`${markdownCell(rfq.id)}\` | ${markdownCell(rfq.title)} | ${markdownCell(rfq.quantityText || rfq.quantity)} | ${markdownCell(rfq.countryText || rfq.country)} | ${markdownCell(rfq.remainingQuotesText || rfq.remainingQuotes)} | ${markdownCell(rfq.buyerText)} | [详情](${rfq.detailUrl}) |`),
+    "| # | RFQ ID | 标题 | 数量 | 买家发布时间 | 国家/地区 | 剩余席位 | 买家 | 页面 |",
+    "|---:|---|---|---:|---|---|---:|---|---|",
+    ...scan.rfqs.map((rfq, index) => `| ${index + 1} | \`${markdownCell(rfq.id)}\` | ${markdownCell(rfq.title)} | ${markdownCell(rfq.quantityText || rfq.quantity)} | ${markdownCell(rfq.publishedText || rfq.publishedAt || "未识别")} | ${markdownCell(rfq.countryText || rfq.country)} | ${markdownCell(rfq.remainingQuotesText || rfq.remainingQuotes)} | ${markdownCell(rfq.buyerText)} | [详情](${rfq.detailUrl}) |`),
     "",
     "### 扫描卡片原文",
     "",
@@ -108,6 +112,7 @@ export function writeRunReport(runId) {
       `#### ${index + 1}. ${rfq.title}`,
       "",
       `- RFQ ID：\`${rfq.id}\``,
+      `- 买家发布时间：${rfq.publishedText || "未识别"}；解析结果：\`${rfq.publishedAt || "未识别"}\``,
       `- 报价入口：[Alibaba 报价页](${rfq.quoteUrl})`,
       "",
       "```text",
@@ -248,18 +253,22 @@ export async function browserStatus() {
   });
 }
 
-export async function scanRfqs({ searchTerm, maxCards = 20 }) {
+export async function scanRfqs({ searchTerm, recentMinutes } = {}) {
   if (!String(searchTerm || "").trim()) throw new Error("searchTerm is required");
   const config = loadConfig();
-  config.maxCardsPerSearch = clamp(maxCards, 1, 30);
+  const windowMinutes = recentMinutes ?? config.recentRfqMinutes;
+  if (!Number.isInteger(windowMinutes) || windowMinutes < 0 || windowMinutes > 525600) throw new Error("recentMinutes must be 0–525600");
   const connectStage = reportProgress("connect", "正在连接应用内浏览器", {}, { target: "Alibaba 浏览器", task: "只读取 RFQ 列表" });
   return withBrowser(config, async ({ page, provider, browserMode }) => {
     reportProgressResult(connectStage, { connected: true, provider, browserMode });
-    const searchStage = reportProgress("search", `正在搜索：${searchTerm}`, {}, { searchTerm, maxCards: config.maxCardsPerSearch });
+    const searchStage = reportProgress("search", `正在搜索：${searchTerm}`, {}, { searchTerm, recentMinutes: windowMinutes });
     const cards = await collectSearchPage(page, config, String(searchTerm).trim());
-    reportProgressResult(searchStage, { count: cards.length, cards: cards.map(({ id, title, summary, quantityText }) =>
-      ({ id, title, summary, quantityText })) });
-    const saveStage = reportProgress("save", `已找到 ${cards.length} 条 RFQ，正在保存扫描结果`, {}, { searchTerm, count: cards.length });
+    const recent = cards.filter((rfq) => publishedWithinMinutes(rfq, windowMinutes, new Date(rfq.collectedAt)));
+    reportProgressResult(searchStage, { scannedCount: cards.length, count: recent.length,
+      cards: recent.map(({ id, title, summary, quantityText, publishedText, publishedAt }) =>
+        ({ id, title, summary, quantityText, publishedText, publishedAt })) });
+    const saveStage = reportProgress("save", `扫描 ${cards.length} 条，发布时间范围内 ${recent.length} 条`, {},
+      { searchTerm, scannedCount: cards.length, recentMinutes: windowMinutes });
     const runId = `${compactTimestamp()}-${slug(searchTerm)}`;
     const paths = runPaths(runId);
     const record = {
@@ -268,8 +277,10 @@ export async function scanRfqs({ searchTerm, maxCards = 20 }) {
       browserMode,
       provider,
       searchTerm: String(searchTerm).trim(),
-      count: cards.length,
-      rfqs: cards.map((card) => ({
+      count: recent.length,
+      scannedCount: cards.length,
+      recentMinutes: windowMinutes,
+      rfqs: recent.map((card) => ({
         id: card.id,
         title: card.title,
         summary: card.summary,
@@ -280,6 +291,7 @@ export async function scanRfqs({ searchTerm, maxCards = 20 }) {
         remainingQuotesText: card.remainingQuotesText,
         remainingQuotes: card.remainingQuotes,
         publishedText: card.publishedText,
+        publishedAt: card.publishedAt,
         buyerText: card.buyerText,
         cardImageUrl: card.cardImageUrl,
         detailUrl: card.detailUrl,
@@ -290,9 +302,10 @@ export async function scanRfqs({ searchTerm, maxCards = 20 }) {
     };
     fs.writeFileSync(paths.scanPath, `${JSON.stringify(record, null, 2)}\n`);
     writeRunReport(runId);
-    reportProgressResult(saveStage, { runId, fileName: path.basename(paths.scanPath), saved: cards.length });
-    const completeStage = reportProgress("complete", `扫描完成：${cards.length} 条 RFQ`, {}, { searchTerm, count: cards.length });
-    reportProgressResult(completeStage, { runId, cards: cards.map(({ id, title }) => ({ id, title })) });
+    reportProgressResult(saveStage, { runId, fileName: path.basename(paths.scanPath), saved: recent.length });
+    const completeStage = reportProgress("complete", `扫描完成：${cards.length} 条，范围内 ${recent.length} 条`, {},
+      { searchTerm, scannedCount: cards.length, count: recent.length });
+    reportProgressResult(completeStage, { runId, cards: recent.map(({ id, title }) => ({ id, title })) });
     return {
       ...record,
       outputPath: paths.scanPath,

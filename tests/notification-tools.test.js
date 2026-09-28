@@ -4,9 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
-import { createNativeNotifier } from "../desktop/native-notifications.js";
+import { createNativeNotifier } from "../src/desktop/native-notifications.js";
 import { createNotificationTools } from "../src/notification-tools.js";
-import { createCaseServer } from "../desktop/server.js";
+import { createCaseServer } from "../src/desktop/server.js";
 import { fileURLToPath } from "node:url";
 const resources = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const fixture = () => ({ rfq: { id: "rfq-tool", title: "Carton", remainingQuotes: 2, quoteUrl: "https://sourcing.alibaba.com/rfq/quote" },

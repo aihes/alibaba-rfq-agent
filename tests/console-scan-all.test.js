@@ -25,7 +25,7 @@ test("all-category scan covers the configured list and forwards literal argument
   const status = scanAllTerms({ log: silent, error: silent, run: (executable, args, options) => {
     calls.push(args[3]);
     assert.equal(executable, process.execPath);
-    assert.deepEqual(args.slice(1), ["scan", "--term", args[3], "--max", "10"]);
+    assert.deepEqual(args.slice(1), ["scan", "--term", args[3]]);
     assert.equal(options.env.AUTO_CONTACT_MODE, "off");
     assert.equal(options.env.ALLOW_LIVE_SUBMIT, "false");
     assert.equal(options.shell, undefined);
