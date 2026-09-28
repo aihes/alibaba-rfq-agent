@@ -10,6 +10,7 @@ import { DesktopSettings } from "../desktop/settings.js";
 import { OperatorConsole } from "../desktop/console.js";
 import { callModelHttp } from "../src/model-http.js";
 import { importCaseData } from "../desktop/import-data.js";
+import { notifyOpportunity } from "../src/notifications.js";
 const resources = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const temporary = () => fs.mkdtempSync(path.join(os.tmpdir(), "rfq-desktop-test-"));
 function seed(root) {
@@ -52,33 +53,88 @@ test("opening an unconfigured workbench does not request keychain access", () =>
     assert.equal(settings.environment().MODEL_API_KEY, "");
   } finally { fs.rmSync(root, { recursive: true }); }
 });
-test("desktop HTTP retains local authorization and evidence allowlist, never probes Chrome when disabled", async () => {
+test("workbench HTTP retains local authorization and evidence allowlist with browser capability on", async () => {
   const root = temporary(); seed(root);
   const service = await createCaseServer({ resources, workspace: root, spawnProcess: () => assert.fail("browser/process must not run") });
   try {
     const get = async (route) => fetch(service.url + route);
     assert.equal((await (await get("api/catalog")).json()).counts.cases, 0);
-    assert.equal((await (await get("api/env/check?force=1")).json()).status, "skipped");
+    let probes = 0;
+    service.console.runJson = async () => { probes++; return { connected: false, loggedIn: false }; };
+    assert.equal((await (await get("api/env/check?force=1")).json()).status, "checked");
+    assert.equal(probes, 1);
     assert.equal((await get("api/extension")).status, 200);
     const post = (origin, payload) => fetch(service.url + "api/ops/settings", { method: "POST", headers: { "Content-Type": "application/json", "X-Case-Console": "1", ...(origin ? { Origin: origin } : {}) }, body: JSON.stringify(payload) });
     assert.equal((await post("https://attacker.example", { browserEnabled: true })).status, 403);
     assert.equal((await post(null, { browserEnabled: true })).status, 403);
-    assert.equal((await post(new URL(service.url).origin, { quoteEnabled: true })).status, 409);
+    assert.equal((await post(new URL(service.url).origin, { quoteEnabled: true })).status, 200);
     assert.equal((await post(new URL(service.url).origin, { alertsEnabled: false })).status, 200);
     assert.equal((await get("api/image?case=../../.env&index=0")).status, 404);
+    const images = path.join(root, "data/rfqs/rfq-photo/images");
+    const drafts = path.join(root, "data/drafts");
+    fs.mkdirSync(images, { recursive: true }); fs.mkdirSync(drafts, { recursive: true });
+    fs.writeFileSync(path.join(images, "product-1.png"), Buffer.from("89504e470d0a1a0a", "hex"));
+    fs.writeFileSync(path.join(drafts, "rfq-photo.json"), JSON.stringify({ rfq: { id: "rfq-photo",
+      imageAssets: [{ filePath: "/previous-computer/product-1.png" }] } }));
+    const photo = await get("api/quote/image?draft=rfq-photo&index=0");
+    assert.equal(photo.status, 200); assert.equal(photo.headers.get("content-type"), "image/png");
+    assert.equal((await get("api/quote/image?draft=rfq-photo")).status, 404);
+    assert.equal((await get("api/quote/image?draft=..%2F..%2F.env&index=0")).status, 404);
   } finally { await service.close(); fs.rmSync(root, { recursive: true }); }
+});
+test("test and real opportunity remain visible in workbench notification history", async () => {
+  const root = temporary(); seed(root);
+  const service = await createCaseServer({ resources, workspace: root, desktop: true,
+    notify: async () => ({ status: "accepted", detail: "system accepted, banner unknown" }),
+    spawnProcess: () => assert.fail("notification must not start browser tasks") });
+  try {
+    service.console.updateSettings({ notificationsEnabled: true });
+    const headers = { "Content-Type": "application/json", "X-Case-Console": "1", Origin: new URL(service.url).origin };
+    const testResponse = await fetch(service.url + "api/notifications/test", { method: "POST", headers, body: "{}" });
+    assert.equal(testResponse.status, 200);
+    const testSnapshot = await (await fetch(service.url + "api/ops/status")).json();
+    assert.equal(testSnapshot.notifications.events[0].kind, "test");
+    const record = { rfq: { id: "rfq-alert", title: "纸箱", remainingQuotes: 2, quoteUrl: "https://sourcing.alibaba.com/rfq/quote" },
+      quote: { status: "quoted", currency: "USD", quantity: 1000, unitPriceUsd: 1, totalUsd: 1000, setupUsd: 0 },
+      draft: { port: "Verified", productName: "Carton", productDetails: "B flute", buyerMessage: "Review" },
+      analysis: { recommendation: "quote", confidence: 0.99, missingRequired: [], riskFlags: [] }, submission: { status: "skipped" } };
+    assert.equal((await notifyOpportunity(record, {}, { file: service.console.settingsFile, send: async () => ({ status: "accepted" }) })).status, "accepted");
+    const snapshot = await (await fetch(service.url + "api/ops/status")).json();
+    assert.equal(snapshot.notifications.events.find((event) => event.draftId === "rfq-alert").message.includes("纸箱"), true);
+    assert.equal(snapshot.notifications.events.some((event) => event.kind === "test"), true);
+    assert.equal(snapshot.notifications.events.find((event) => event.draftId === "rfq-alert").id, "opportunity:rfq-alert");
+  } finally { await service.close(); fs.rmSync(root, { recursive: true }); }
+});
+test("an old attention banner is labeled as an RFQ-page check, not current account state", () => {
+  const root = temporary(); seed(root);
+  try {
+    const dir = path.join(root, "data/case-catalog/ops");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "last-run.json"), JSON.stringify({ id: "oldrun", kind: "once", status: "attention", alert: "登录、验证码或连接需要人工处理" }));
+    fs.writeFileSync(path.join(dir, "oldrun.log"), "Error: Alibaba login is required in the selected browser session.\n");
+    const console = new OperatorConsole({ resources, workspace: root });
+    assert.match(console.snapshot().run.alert, /RFQ 页面遇到登录提示/);
+  } finally { fs.rmSync(root, { recursive: true }); }
 });
 test("console requires saved model and respects scan/quote authorization and concurrency", () => {
   const root = temporary(); seed(root);
   try {
+    // 旧版本可能把总开关保存为 false；升级后所有工作台都忽略这个
+    // 废弃字段。启动任务仍须点击，逐单报价仍须单独确认。
+    fs.mkdirSync(path.join(root, "data/case-catalog/ops"), { recursive: true });
+    fs.writeFileSync(path.join(root, "data/case-catalog/ops/settings.json"), JSON.stringify({ browserEnabled: false }));
     const c = new OperatorConsole({ resources, workspace: root, desktop: true, spawnProcess: () => assert.fail("must not run") });
     const request = { kind: "once", term: c.searchTerms[0], limit: 1 };
-    assert.throws(() => c.start(request), /浏览器/);
-    c.updateSettings({ browserEnabled: true }); assert.throws(() => c.start(request), /API Key/);
+    assert.equal(c.settings.browserEnabled, true);
+    assert.throws(() => c.start(request), /API Key/);
     c.probe = {}; assert.throws(() => c.start(request), /环境检测/); c.probe = null;
     c.quotePreparing = true; assert.throws(() => c.start(request), /已有任务/); c.quotePreparing = false;
-    c.updateSettings({ quoteEnabled: true }); c.updateSettings({ browserEnabled: false }); assert.equal(c.settings.quoteEnabled, false);
-    const restored = new OperatorConsole({ resources, workspace: root }); assert.equal(restored.settings.quoteEnabled, false);
+    c.updateSettings({ quoteEnabled: true });
+    assert.throws(() => c.updateSettings({ browserEnabled: false }), /默认可用/);
+    c.updateSettings({ quoteEnabled: false }); assert.equal(c.settings.quoteEnabled, false);
+    assert.equal(new OperatorConsole({ resources, workspace: root, desktop: true }).settings.browserEnabled, true);
+    const restored = new OperatorConsole({ resources, workspace: root });
+    assert.equal(restored.settings.browserEnabled, true); assert.equal(restored.settings.quoteEnabled, false);
   } finally { fs.rmSync(root, { recursive: true }); }
 });
 test("HTTP model adapter returns final JSON only, rejects truncation and does not echo credentials", async () => {
@@ -122,11 +178,10 @@ test("stopping an owned task escalates a stubborn process and records stopped st
   fs.writeFileSync(path.join(fakeResources, "scripts/build_case_catalog.mjs"), 'console.log(JSON.stringify({ok:true}));');
   const c = new OperatorConsole({ resources: fakeResources, workspace: root });
   try {
-    c.updateSettings({ browserEnabled: true });
     c.start({ kind: "watch", term: c.searchTerms[0], limit: 1 });
     const pid = c.process.pid;
     for (let i = 0; i < 40 && !c.tail().includes("ready"); i++) await new Promise((resolve) => setTimeout(resolve, 25));
-    assert.match(c.tail(), /ready/); c.updateSettings({ browserEnabled: false });
+    assert.match(c.tail(), /ready/); c.stop();
     assert.equal(c.current.status, "stopping");
     for (let i = 0; i < 140 && c.current; i++) await new Promise((resolve) => setTimeout(resolve, 25));
     assert.equal(c.current, null); assert.equal(c.last.status, "stopped");

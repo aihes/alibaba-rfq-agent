@@ -54,14 +54,40 @@ test("local Claude connection test uses the app-selected executable without expo
   const settings = new DesktopSettings(root, cipher, { localEnvironment: { variables: { LOCAL_CLAUDE_EXECUTABLE: process.execPath }, source: "fixture" },
     detectClaude: () => process.execPath });
   let calls = 0;
-  const service = await createCaseServer({ resources: path.resolve("."), workspace: root, desktopSettings: settings, testLocalClaude: async env => {
+  const service = await createCaseServer({ resources: path.resolve("."), workspace: root, desktop: true, desktopSettings: settings,
+    environment: () => settings.environment(), testLocalClaude: async env => {
     calls++; assert.equal(env.LOCAL_CLAUDE_EXECUTABLE, process.execPath); assert.equal(env.AGENT_PROVIDER, "local-claude-sdk"); return { ok: true };
   } });
   try {
     const post = () => fetch(service.url + "api/desktop/model/test", { method: "POST", headers: { Origin: new URL(service.url).origin,
       "X-Case-Console": "1", "Content-Type": "application/json" }, body: "{}" });
+    const modelBefore = (await fetch(service.url + "api/env/check").then(r => r.json())).checks.find(c => c.key === "model");
+    assert.equal(modelBefore.state, "已配置 · 待检测"); assert.equal(calls, 0);
     assert.equal((await post()).status, 200); assert.equal(calls, 1);
+    const modelAfter = (await fetch(service.url + "api/env/check").then(r => r.json())).checks.find(c => c.key === "model");
+    assert.equal(modelAfter.state, "实测可用"); assert.equal(modelAfter.ok, true);
+    settings.save({ modelName: "changed-model" });
+    assert.equal((await fetch(service.url + "api/env/check").then(r => r.json())).checks.find(c => c.key === "model").state, "已配置 · 待检测");
     assert.equal((await fetch(service.url + "api/desktop/info").then(r => r.json())).settings.modelReady, true);
+  } finally { await service.close(); fs.rmSync(root, { recursive: true }); }
+});
+test("OCR probe recognizes a fixed sample and invalidates success when the key changes", async () => {
+  const root = temporary(); fs.mkdirSync(path.join(root, "data/case-catalog"), { recursive: true });
+  fs.writeFileSync(path.join(root, "data/case-catalog/cases.json"), '{"cases":[],"counts":{}}');
+  const settings = new DesktopSettings(root, cipher, { localEnvironment: { variables: { GLM_OCR_API_KEY: "synthetic-ocr-key" }, source: "fixture" }, detectClaude: () => "" });
+  let response = { status: "read", text: "RFQ 123" }, calls = 0;
+  const service = await createCaseServer({ resources: path.resolve("."), workspace: root, desktop: true, desktopSettings: settings,
+    environment: () => settings.environment(), testOcr: async () => { calls++; return response; } });
+  const check = async () => (await fetch(service.url + "api/env/check").then(r => r.json())).checks.find(c => c.key === "ocr");
+  const post = () => fetch(service.url + "api/desktop/ocr/test", { method: "POST", headers: { Origin: new URL(service.url).origin,
+    "X-Case-Console": "1", "Content-Type": "application/json" }, body: "{}" });
+  try {
+    assert.equal((await check()).state, "已配置 · 待检测"); assert.equal(calls, 0);
+    assert.equal((await post()).status, 200); assert.equal((await check()).state, "实测可用");
+    response = { status: "empty", text: "" };
+    assert.equal((await post()).status, 409); assert.equal((await check()).state, "检测失败");
+    settings.save({ ocrApiKey: "changed-synthetic-key" });
+    assert.equal((await check()).state, "已配置 · 待检测");
   } finally { await service.close(); fs.rmSync(root, { recursive: true }); }
 });
 test("auto uses local GLM without storing its key; manual and explicit environment selection remain predictable", async () => {

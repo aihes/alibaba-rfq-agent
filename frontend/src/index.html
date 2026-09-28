@@ -68,10 +68,10 @@
                 <strong>应用内的阿里巴巴浏览器</strong>
                 <ol class="extension-steps">
                   <li><strong>打开并手动登录</strong><span>使用应用自带的 Chromium，登录会话保存在本机，与个人 Chrome 分开。无需安装浏览器或插件。</span></li>
-                  <li><strong>登录后即可看到状态</strong><span>打开 RFQ 列表后，账号状态会自动检查并更新。准备扫描时再到「报价 Agent」开启操作权限并启动任务。验证码或登录失效须先停止任务，再手动处理。</span></li>
+                  <li><strong>登录后即可看到状态</strong><span>打开 RFQ 列表后，账号状态会自动检查并更新。准备扫描时到「报价 Agent」启动任务。验证码或登录失效须先停止任务，再手动处理。</span></li>
                 </ol>
                 <div class="extension-actions"><button id="embedded-browser-open" type="button">打开阿里巴巴浏览器</button><button id="embedded-browser-home" type="button">打开 RFQ 列表</button></div>
-                <p id="embedded-browser-status" class="extension-status" role="status" aria-live="polite">打开窗口供手动登录，不会开启 Agent 控制或开始报价。</p>
+                <p id="embedded-browser-status" class="extension-status" role="status" aria-live="polite">打开窗口供手动登录；启动任务前不会扫描或报价。</p>
               </div>
 
             <div class="browser-navigation settings-sheet">
@@ -84,7 +84,6 @@
             <div class="settings-sheet browser-login-import"><h3>导入 Chrome 中的 Alibaba 登录</h3><p class="ops-help">在原 Chrome 中导出 Alibaba 登录文件，再在这里导入。导入会替换应用内当前登录记录，并打开 RFQ 列表检查账号；出现登录失效或安全验证时，仍需手动处理。</p><div class="settings-actions"><button id="browser-login-import" type="button" class="primary">选择登录文件并导入</button></div><p id="browser-import-status" class="extension-status" role="status">支持登录 Cookie JSON 文件；从系统选择框选择文件，数据保存在本机。</p>
               <details class="env-diagnostics"><summary>还没有登录文件？使用项目附带的导出工具</summary><ol class="extension-steps"><li><strong>下载并解压导出工具</strong><span><a href="/api/desktop/browser/export-tool" download>下载 Alibaba 登录导出工具 ZIP</a>，解压到一个保留的文件夹。</span></li><li><strong>在原 Chrome 中加载</strong><span>打开 chrome://extensions，开启开发者模式，选择「加载已解压的扩展程序」，选刚解压的文件夹。</span></li><li><strong>导出并回到这里导入</strong><span>确认原 Chrome 的 Alibaba 已登录。打开插件，点击「导出 Alibaba 登录文件」，然后选择下载的 JSON 文件导入。</span></li></ol><p class="ops-help">导出文件包含账号登录凭据，请妥善保管。部分网站会话绑定设备或浏览器，迁移后可能要求重新验证。</p></details>
             </div>
-            <label class="toggle-row"><span><strong>允许 Agent 操作浏览器</strong><small>开启后才允许扫描和报价操作。手动浏览和登录状态检查无需开启。</small></span><input id="browser-page-enabled" type="checkbox" role="switch" /></label>
             <div class="browser-capabilities settings-sheet"><h3>这个浏览器可以做什么？</h3><dl><div><dt>已支持</dt><dd>Alibaba 登录、搜索、商品 / RFQ 页面、网页表单、后退、前进、刷新、当前标签和链接复制。</dd></div><div><dt>Agent 能力</dt><dd>扫描与分析 RFQ、生成草稿、确认后回填及逐单提交。打开窗口和只读检测都不会开始报价。</dd></div><div><dt>当前范围</dt><dd>Alibaba 专用的单窗口浏览器；暂未提供多标签、扩展安装、书签或下载管理界面。外部网站请使用日常浏览器。</dd></div></dl></div>
           </div>
         </section>
@@ -107,6 +106,7 @@
               <label>GLM OCR API Key<input id="ocr-api-key" type="password" autocomplete="off" placeholder="留空复用智普模型 Key 或本机环境变量" /></label>
               <label>GLM OCR 接口地址<input id="ocr-api-url" type="url" required spellcheck="false" /></label>
               <p id="ocr-key-status" class="ops-help wide" role="status"></p>
+              <div class="settings-actions wide"><button id="ocr-test" type="button">测试 OCR 识别</button><small id="ocr-settings-status" role="status" aria-live="polite">使用内置样张进行实际请求，会产生少量 OCR 用量。</small></div>
               </fieldset><fieldset class="settings-group wide" id="settings-run"><legend>03 / 报价与监控</legend><label>已核实的交货地点 / 港口<input id="quote-port" maxlength="200" placeholder="EXW 工厂城市或 FOB 装运港；未核实请留空" /></label>
               <label>持续监控间隔（秒）<input id="poll-interval" type="number" min="60" max="86400" required value="600" /></label>
               </fieldset><p class="ops-help wide">分析时需求文本会发送到所选模型；开启 GLM OCR 后，RFQ 图片会发送到智谱识别，按服务用量计费。密钥保存在本机，保存后不回显。</p>
@@ -143,13 +143,12 @@
                     <span>Mac 选择文件夹时按 ⌘⇧G，粘贴插件目录并回车，再点击「选择」。</span>
                     <div class="extension-address"><input id="extension-manager" value="chrome://extensions" readonly aria-label="Chrome 扩展管理地址" /><button type="button" id="extension-copy-manager">复制地址</button></div>
                   </li>
-                  <li><strong>打开 Bridge Mode 并检测</strong><span>在 Chrome 右上角拼图菜单固定并打开 Midscene.js，进入「Bridge Mode」。开启下方浏览器开关并重新检测；插件询问连接时点击「Allow」，同时确认 Alibaba 已登录。</span></li>
+                  <li><strong>打开 Bridge Mode 并检测</strong><span>在 Chrome 右上角拼图菜单固定并打开 Midscene.js，进入「Bridge Mode」。重新检测时，插件询问连接请点击「Allow」，同时确认 Alibaba 已登录。</span></li>
                 </ol>
-                <p id="extension-status" class="extension-status" role="status" aria-live="polite">准备文件不会安装插件或开启浏览器控制。</p>
+                <p id="extension-status" class="extension-status" role="status" aria-live="polite">准备文件不会安装插件或启动扫描任务。</p>
                 <a href="/api/extension/download" class="extension-download" download>下载项目内的官方 ZIP 安装包 ↗</a>
                 <p class="extension-note">安装后请保留插件目录，Chrome 会继续使用这里的文件。</p>
               </details>
-              <label class="toggle-row spaced"><span><strong>允许 Agent 操作浏览器</strong><small id="browser-control-help">关闭时禁止连接浏览器，也无法扫描；运行中关闭会停止任务。</small></span><input id="browser-enabled" type="checkbox" role="switch" /></label>
               <div id="env-config-checks"></div>
             </div>
             <div class="agent-card">
@@ -160,10 +159,11 @@
               </div>
               <p class="ops-help">「只扫描」仅发现新需求；「运行一轮分析」对照规则生成报价草稿；「持续监控」按配置轮询自动执行。</p>
               <div class="ops-actions">
-                <button type="button" data-action="scan" class="light">只扫描 RFQ</button>
-                <button type="button" data-action="once" class="primary">运行一轮分析</button>
-                <button type="button" data-action="watch" class="light">持续监控</button>
+                <span class="ops-action-wrap"><button type="button" data-action="scan" class="light">只扫描 RFQ</button></span>
+                <span class="ops-action-wrap"><button type="button" data-action="once" class="primary">运行一轮分析</button></span>
+                <span class="ops-action-wrap"><button type="button" data-action="watch" class="light">持续监控</button></span>
               </div>
+              <p id="scan-action-help" class="ops-help scan-action-help" role="status" aria-live="polite"></p>
               <div class="ops-bottom"><button type="button" data-action="refresh" class="text-button">重新整理数据集 ↗</button><span>不连接浏览器</span></div>
             </div>
             <div class="agent-card">
@@ -177,25 +177,55 @@
                 </button>
               </div>
               <p class="ops-help" id="mode-help">当前模式：仅生成报价话术。</p>
-              <div class="mode-note"><span>开启逐单报价会同时开启浏览器控制；扫描和监控仍只生成草稿。重启服务后回落到话术模式。</span></div>
-              <label class="toggle-row"><span><strong>机会系统通知</strong><small>新草稿通过当前价格规则、规格、交货地点和金额核对后提醒；点击查看对应草稿供人工复核。</small></span><input id="notifications-enabled" type="checkbox" role="switch" /></label>
+              <div class="mode-note"><span>扫描和监控仍只生成草稿；逐单报价需选择草稿并确认。重启服务后回落到话术模式。</span></div>
+              <label class="toggle-row"><span><strong>机会通知</strong><small>新草稿通过当前价格规则、规格、交货地点和金额核对后提醒；应用内提醒可打开草稿供人工复核。</small></span><input id="notifications-enabled" type="checkbox" role="switch" /></label>
               <div class="notification-actions"><button type="button" id="notification-test" disabled>发送测试通知</button><small id="notification-platform">当前支持 macOS</small></div>
               <p class="notification-status" id="notification-status" role="status" aria-live="polite">关闭工作台页面仍可通知；请保持终端、监听 Chrome 和持续监控任务运行。</p>
+              <div class="notification-history"><strong>最近提醒</strong><div id="notification-history-list" class="notification-history-list"><small>暂无提醒</small></div></div>
             </div>
           </div>
           <!-- 稳定的交互入口；monitor-card 仅负责样式，布局调整时可改名。 -->
           <div class="monitor-card" id="ops-monitor">
             <div class="ops-heading"><span>04 / MONITOR</span><h3>任务状态</h3><label class="mini-toggle"><input id="alerts-enabled" type="checkbox" role="switch" checked /><span>异常提醒</span></label></div>
             <div class="run-status"><span class="status-dot" id="run-dot"></span><strong id="run-status">读取中…</strong><span id="run-time">—</span></div>
+            <div class="run-progress" id="run-progress" role="status" aria-live="polite">
+              <div class="run-progress-heading"><strong id="run-progress-stage">等待启动任务</strong><span id="run-progress-time">—</span></div>
+              <p id="run-progress-detail">点击扫描或分析后，这里会显示当前步骤和处理数量。</p>
+              <ol id="run-progress-steps" class="run-progress-steps"></ol>
+            </div>
+            <div class="run-history-section"><div class="run-history-heading"><strong>阶段记录 · 点击任一步查看输入和输出</strong><small id="run-history-count">启动任务后逐步记录</small></div>
+              <ol id="run-history" class="run-history"><li class="empty">暂无阶段记录。</li></ol></div>
             <div class="run-facts" id="run-facts"></div>
             <div class="run-tools"><span id="run-id">尚无运行记录</span><button type="button" id="stop-run" class="stop-button" disabled>停止当前任务</button></div>
-            <div class="log-header"><strong>实时日志</strong><small>仅显示最近约 20 KB · 本机留存</small></div>
-            <pre class="run-log" id="run-log">尚无运行日志。</pre>
+            <details class="run-log-details"><summary>查看技术日志</summary><p id="run-log-summary" class="ops-help">遇到问题时可展开给开发人员排查；这里保留最近约 20 KB。</p><pre class="run-log" id="run-log">尚无运行日志。</pre></details>
           </div>
           <div class="quote-workbench">
             <div class="section-heading"><div><span class="section-index">05 / QUOTE</span><h2>浏览器报价</h2></div><p id="quote-count">读取草稿中…</p></div>
-            <div class="quote-workbench-grid">
-              <div class="quote-picker"><div class="list-head"><span>RFQ 草稿</span><span>价格状态</span></div><div id="quote-list" class="quote-list"></div></div>
+            <section id="submitted-quotes-section" class="submitted-quotes" aria-labelledby="submitted-quotes-title">
+              <div class="submitted-quotes-heading"><h3 id="submitted-quotes-title">已验证提交的报价</h3><small>仅展示已有明确规则报价，且 Alibaba 页面成功状态已核验的记录</small></div>
+              <div id="submitted-quote-list" class="submitted-quote-list"><p class="empty">正在读取已提交报价…</p></div>
+            </section>
+            <section id="priced-quotes-section" class="submitted-quotes" aria-labelledby="priced-quotes-title">
+              <div class="submitted-quotes-heading"><h3 id="priced-quotes-title">明确报价</h3><small>须有规则确认的数量、单价、总价和完整拟回复；条件金额不计入</small></div>
+              <div id="priced-quote-list" class="submitted-quote-list"><p class="empty">正在读取报价金额…</p></div>
+            </section>
+            <div class="quote-list-heading"><div><h3 id="drafts-title">明确报价草稿</h3><p>这里只显示规则价已确认且拟回复完整的 RFQ。待复核需求和条件报价保留在本地分析记录中，不进入报价列表。</p></div><button type="button" id="quote-show-archived" class="light">查看已移出草稿</button></div>
+            <div class="quote-filters" aria-label="筛选明确报价">
+              <label class="quote-search">搜索需求或拟回复<input id="quote-search" type="search" placeholder="商品、RFQ ID、买家需求、回复内容" autocomplete="off" /></label>
+              <label>提交进度<select id="quote-status-filter"><option value="all">全部明确报价</option><option value="unsubmitted">未提交</option><option value="filled_not_submitted">已回填，未提交</option><option value="submitted">已验证提交</option></select></label>
+              <label>品类<select id="quote-category-filter"><option value="all">全部品类</option></select></label>
+              <label>生成起始日<input id="quote-date-from" type="date" /></label><label>生成截止日<input id="quote-date-to" type="date" /></label>
+              <span id="quote-filter-count" role="status">—</span>
+            </div>
+            <details class="quote-status-help"><summary>这些状态是什么意思？</summary><dl>
+              <div><dt>明确规则报价</dt><dd>AI 提取的规格匹配本地价格规则，已有可核对的金额和拟回复；仍需人工核对实际供货条件。</dd></div>
+              <div><dt>未提交</dt><dd>已有明确报价，但尚无 Alibaba 成功提交的记录。</dd></div>
+              <div><dt>已回填，未提交</dt><dd>应用记录了浏览器表单回填，仍需核对页面并确认是否提交。</dd></div>
+              <div><dt>已验证提交</dt><dd>Alibaba 页面显示提交成功，且本地保存了提交状态。</dd></div>
+              <div><dt>需要人工复核 / 条件报价</dt><dd>规格或价格条件尚未确定；这两类分析结果不出现在本报价列表。</dd></div>
+            </dl></details>
+            <div id="quote-workbench-grid" class="quote-workbench-grid">
+              <div class="quote-picker"><div class="list-head"><span id="quote-list-title">明确报价草稿</span><span>价格状态 / 生成时间</span></div><div id="quote-list" class="quote-list"></div></div>
               <div class="quote-detail" id="quote-detail"><div class="empty">选择一条草稿，核对报价内容。</div></div>
             </div>
           </div>
@@ -203,5 +233,10 @@
         <footer class="page-footer"><span>RFQ / QUOTE DATASET</span><span>Agent 已验证提交 <strong id="submitted-count">—</strong> 条。客户报价单 ≠ 已发送；系统条件报价 ≠ 成交。</span></footer>
       </main>
     </div>
+    <aside id="notification-toast" class="notification-toast" role="alert" hidden>
+      <div class="notification-toast-head"><strong id="notification-toast-title">RFQ 助手提醒</strong><button type="button" id="notification-toast-close" aria-label="关闭提醒">×</button></div>
+      <p id="notification-toast-body"></p>
+      <button type="button" id="notification-toast-open" hidden>查看草稿 ↗</button>
+    </aside>
   </body>
 </html>

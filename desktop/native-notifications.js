@@ -2,7 +2,7 @@
  * 工具负责；这里仅把固定标题、正文与草稿目标交给操作系统。
  * 不向调用者暴露 BrowserWindow、shell、URL 或任意 IPC 权限。
  */
-export function createNativeNotifier({ Notification, openDraft, waitMs = 1500 }) {
+export function createNativeNotifier({ Notification, openDraft, showOpportunity = () => {}, waitMs = 1500 }) {
   const active = new Set();
   const draftPattern = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/;
   const clean = (value) => String(value || "").replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 160);
@@ -12,10 +12,13 @@ export function createNativeNotifier({ Notification, openDraft, waitMs = 1500 })
     notification.on("close", () => active.delete(notification));
   }
   async function send(payload) {
-    if (!Notification.isSupported()) return { status: "unsupported", detail: "当前系统不支持原生通知" };
     if (payload.draftId !== undefined && !draftPattern.test(payload.draftId)) throw new Error("通知草稿 ID 无效");
     if (payload.test !== true && !payload.draftId) throw new Error("机会通知必须指定草稿 ID");
     const test = payload.test === true;
+    // 系统横幅可能被通知权限或专注模式隐藏。真实机会同时唤出本应用，
+    // 渲染页从持久化记录弹出提醒；系统通知不可用也不丢失产品内入口。
+    if (!test) { try { showOpportunity(); } catch { /* 系统通知仍继续尝试 */ } }
+    if (!Notification.isSupported()) return { status: "unsupported", detail: "当前系统不支持原生通知；请在 RFQ 助手查看提醒" };
     const notification = new Notification({ title: "RFQ 助手", id: test ? "rfq-test" : `rfq-${payload.draftId}`,
       groupId: "rfq-opportunities", sound: "default",
       body: test ? "系统通知测试：收到后即可开启持续监控。"

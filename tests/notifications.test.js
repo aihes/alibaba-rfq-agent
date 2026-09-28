@@ -38,7 +38,9 @@ test("opportunity notifications persist deduplication and read the off switch wh
     fs.writeFileSync(file, JSON.stringify({ notificationsEnabled: false }));
     assert.equal((await notifyOpportunity(next, {}, { file, send })).status, "disabled");
     assert.equal(calls, 1);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(root, "notification-state.json"))).attempts["rfq-new"].status, "accepted");
+    const saved = JSON.parse(fs.readFileSync(path.join(root, "notification-state.json"))).attempts["rfq-new"];
+    assert.equal(saved.status, "accepted");
+    assert.match(saved.message, /纸箱.*USD 1\/件/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

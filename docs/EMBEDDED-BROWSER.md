@@ -1,4 +1,4 @@
-# 内置阿里巴巴浏览器（0.7.6）
+# 内置阿里巴巴浏览器
 
 ## 工作区菜单
 
@@ -7,7 +7,7 @@
 - 浏览器：窗口 / 当前页面 / 账号 / 独立会话 / 内核 / 任务占用状态，2 秒刷新；打开窗口、后退、前进、刷新、隐藏、打开 Alibaba 网址及导入 Chrome Alibaba 登录文件。
 - 设置：模型服务、图片识别、报价与监控、数据导入及应用版本。配置沿用同一套加密保存接口，后续设置按分组扩展。
 
-窗口打开后自动检查登录状态，无需开启 Agent 操作权限；「刷新状态」可以立即检查。
+窗口打开后自动检查登录状态；「刷新状态」可以立即检查。浏览器操作默认可用，但不会自行启动任务。
 界面每 2 秒更新，同页最多每 10 秒检查一次，失败也限频。任务占用或页面加载期间
 只返回快照，不附着 CDP，不撤销任务 lease。导航后登录结果和限频缓存失效。
 固定脚本只读取当前 RFQ 页面的可见文字，不接受前端传入脚本、不导航、不建立
@@ -21,7 +21,7 @@
 
 ## 用户流程
 
-打开 RFQ 助手 → 配置模型 → 在报价 Agent 打开浏览器 → 手动登录 → 打开 RFQ 列表 → 自动显示账号状态 → 开启 Agent 操作权限 → 扫描或持续监控。
+打开 RFQ 助手 → 配置模型 → 在报价 Agent 打开浏览器 → 手动登录 → 打开 RFQ 列表 → 自动显示账号状态 → 扫描或持续监控。
 
 发现可报价草稿沿用机会通知和 CASE 审阅。回填与提交继续使用已有的单条
 RFQ 确认、价格规则复核、字段回读、截图和提交成功状态落盘，不自动发送报价。
@@ -45,7 +45,11 @@ flowchart LR
 - 主进程：`desktop/embedded-browser.js` 管理一个浏览器窗口；本地工具栏使用窗口自身页面，
   Alibaba 页面置于独立 `WebContentsView` 中。工具栏只接收过滤后的标题和链接，不接触网页 DOM 或登录存储。
 - 会话：`persist:rfq-alibaba`，与工作台默认 session 分开，保存在操作系统
-  应用数据目录。Chromium 自行维护登录；浏览器任务不读取认证存储。
+  应用数据目录。Chromium 持久化有过期时间的 Cookie 和站点存储；对重启
+  即丢的 session Cookie，主进程使用本机 AES-GCM 加密文件备份本应用的
+  Alibaba Cookie，并在首次导航前恢复；密钥文件和备份仅当前系统用户
+  可读。网站注销会更新备份，退出时主动写盘。状态不包含 Cookie 值。
+  浏览器任务不读取认证存储。
   用户主动导入通过 `desktop/browser-import.js` 和原生文件选择框写入此专用会话，
   失败回滚只读取应用自己的记录，不访问原 Chrome 的认证数据库。
 - CDP：原生 `webContents.debugger.attach/sendCommand`，未设置
@@ -86,7 +90,9 @@ sandbox 和 contextIsolation 开启。脚本/截图还检查预期 URL，手动�
 ## 验证
 
 `npm test` 覆盖来源检查、链接复制范围、令牌权限、页面范围、报价开关、lease 撤销和
-原有价格、提交、通知规则。`npm run desktop:test:browser` 在真实 Electron
+原有价格、提交、通知规则。`npm run desktop:test:session` 用隔离的假
+Alibaba Cookie 连续启动五次真实 Electron，验证原始丢失、加密恢复和
+注销后不恢复。`npm run desktop:test:browser` 在真实 Electron
 Chromium 上启动独立本地模拟站点，验证 DOM 读取、回填不提交、错误确认
 拒绝、明确确认后的模拟成功、PNG 截图、报价权限关闭、标签地址复制和隐藏窗口复用。
 本地测试白名单仅由测试入口注入，产品配置没有开放任意站点的开关。
@@ -98,4 +104,5 @@ Windows 安装、浏览器操作和通知仍需要 Windows 实机验证；macOS 
 
 官方依据：[Electron WebContentsView](https://www.electronjs.org/docs/latest/api/web-contents-view)、
 [Electron CDP debugger](https://www.electronjs.org/docs/latest/api/debugger)、
-[Electron 持久 session](https://www.electronjs.org/docs/latest/api/session)。
+[Electron 持久 session](https://www.electronjs.org/docs/latest/api/session)、
+[Electron Cookie 生命周期](https://www.electronjs.org/docs/latest/api/cookies)。

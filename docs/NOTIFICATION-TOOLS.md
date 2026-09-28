@@ -2,9 +2,10 @@
 
 ## 用户使用
 
-在「报价 Agent」开启「机会系统通知」，先点「发送测试通知」。macOS
+在「报价 Agent」开启「机会通知」，先点「发送测试通知」。macOS
 询问时允许 RFQ 助手通知，在系统设置 → 通知 → RFQ 助手中选择横幅
-和声音。专注模式可能隐藏横幅，收到测试通知后再启动持续监控。
+和声音。专注模式可能隐藏横幅；测试按钮仍会在应用内弹出提醒。
+「最近提醒」保存测试结果与可报价机会，重新打开应用也能查看草稿。
 
 扫描完成并保存新草稿后自动检查：当前确定性价格规则仍匹配、美元
 数量/单价/总价可核对、无一次性费用、商品描述和交货地点完整、Agent
@@ -80,7 +81,7 @@ npm run notifications:tool -- --connection "$HOME/Library/Application Support/RF
 ## 记录与运行边界
 
 `data/case-catalog/ops/notification-status.json` 保存最近结果；
-`notification-state.json` 是汇总索引；`notification-claims/<draftId>.json`
+`notification-test.json` 保存最近一次测试，`notification-state.json` 保存机会提醒索引；`notification-claims/<draftId>.json`
 通过 exclusive-create 保证多个进程同时发现同一 RFQ 时仅一个发送。
 通知失败不影响草稿保存与后续扫描。私有连接文件不进入安装包。
 

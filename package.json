@@ -1,6 +1,6 @@
 {
   "name": "alibaba-rfq-agent",
-  "version": "0.7.6",
+  "version": "0.7.19",
   "private": true,
   "type": "module",
   "description": "Alibaba RFQ desktop assistant with an isolated embedded Chromium browser, guarded pricing and quote review.",
@@ -31,7 +31,8 @@
     "desktop:dist:win": "node scripts/build-windows.mjs",
     "notifications:tool": "node scripts/notification-tools.mjs",
     "desktop:check": "node scripts/check-desktop-package.mjs",
-    "desktop:test:browser": "node scripts/run-electron.mjs scripts/electron-browser-smoke.mjs"
+    "desktop:test:browser": "node scripts/run-electron.mjs scripts/electron-browser-smoke.mjs",
+    "desktop:test:session": "node scripts/electron-session-restart-smoke.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.274",

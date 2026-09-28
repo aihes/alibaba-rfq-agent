@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import vm from "node:vm";
 import { EventEmitter } from "node:events";
 import { EmbeddedBrowser, alibabaNavigationAllowed, shareableBrowserUrl, RFQ_PARTITION, RFQ_HOME } from "../desktop/embedded-browser.js";
 
@@ -15,7 +16,7 @@ test("copyable tab URLs include RFQ IDs but never login tickets or arbitrary sit
 });
 import { createCaseServer } from "../desktop/server.js";
 import { connectElectronBrowser } from "../src/electron-browser.js";
-import { connectBrowser, assertAlibabaReady } from "../src/browser.js";
+import { connectBrowser, assertAlibabaReady, alibabaLoginStatus } from "../src/browser.js";
 import { parseAlibabaLoginFile } from "../desktop/browser-import.js";
 
 class FakeWindow extends EventEmitter {
@@ -69,7 +70,8 @@ test("manual login inspection works with Agent disabled, exposes no auth query, 
     await b.open(`${RFQ_HOME}?session=private-value`);
     const wc = b.window.webContents;
     wc.debugger.sendCommand = async (_method, params) => {
-      assert.equal(params.expression, "document.body?.innerText?.slice(0, 30000) || ''");
+      assert.match(params.expression, /document\.body\?\.innerText/);
+      assert.match(params.expression, /logoutEntry/);
       return { result: { value: "Sign In | My Alibaba | Quote Now" } };
     };
     const inspected = await b.inspect();
@@ -124,6 +126,47 @@ test("automatic status is bounded, invalidates on navigation and never interrupt
     assert.equal(b.info().inspectionError, null); assert.equal(reads, 5);
   } finally { b.close(); }
 });
+test("public RFQ navigation is not treated as proof of login and quit flushes the owned session", async () => {
+  const b = new EmbeddedBrowser({ BrowserWindow: FakeWindow, authorize: () => ({ browser: false }) });
+  try {
+    await b.open();
+    const wc = b.window.webContents, flushed = [];
+    wc.debugger.sendCommand = async () => ({ result: { value: "My Alibaba\nQuote Now\nFavorites" } });
+    assert.equal((await b.inspect()).inspection.status, "unknown");
+    // 账号菜单收起时 innerText 没有 Log out，DOM 中的菜单项仍可证明已登录。
+    wc.debugger.sendCommand = async () => ({ result: { value: { body: "My Alibaba\nQuote Now\nFavorites", logoutEntry: true } } });
+    assert.equal((await b.inspect()).inspection.status, "logged_in");
+    wc.debugger.sendCommand = async () => ({ result: { value: { body: "My Alibaba\nQuote Now\nFavorites", accountHeader: true, loginEntry: false } } });
+    assert.equal((await b.inspect()).inspection.status, "logged_in");
+    wc.debugger.sendCommand = async () => ({ result: { value: { body: "My Alibaba\nQuote Now\nFavorites", accountHeader: true, loginEntry: true } } });
+    assert.equal((await b.inspect()).inspection.status, "login_required");
+    wc.debugger.sendCommand = async () => ({ result: { value: "My Alibaba\n退出\n立即报价" } });
+    assert.equal((await b.inspect()).inspection.status, "logged_in");
+    wc.session.cookies = { flushStore: async () => flushed.push("cookies") };
+    wc.session.flushStorageData = () => flushed.push("storage");
+    await b.flushSession();
+    assert.deepEqual(flushed, ["cookies", "storage"]);
+  } finally { b.close(); }
+});
+test("inspection reads a collapsed account menu without exposing account text", async () => {
+  const b = new EmbeddedBrowser({ BrowserWindow: FakeWindow, authorize: () => ({ browser: false }) });
+  try {
+    await b.open();
+    const link = (text, href) => ({ textContent: text, href, getBoundingClientRect: () => ({ top: 100, bottom: 120, width: 80, height: 20 }), getClientRects: () => [{}] });
+    const account = link("My Alibaba 0", "https://i.alibaba.com/");
+    const logout = link("Log out", "https://login.alibaba.com/logout.htm");
+    b.window.webContents.debugger.sendCommand = async (_method, params) => {
+      const document = { body: { innerText: "My Alibaba\nOrder\nFavorites" }, querySelectorAll: () => [account, logout] };
+      const value = vm.runInNewContext(params.expression, { document, URL, getComputedStyle: () => ({ display: "block", visibility: "visible" }) });
+      assert.equal(value.body.includes("Log out"), false);
+      assert.equal(value.logoutEntry, true);
+      assert.equal(value.accountHeader, true);
+      assert.equal(value.loginEntry, false);
+      return { result: { value } };
+    };
+    assert.equal((await b.inspect()).inspection.status, "logged_in");
+  } finally { b.close(); }
+});
 test("login migration rejects busy browsers, invalidates stale login inspection and never enables automation", async () => {
   const permission = { browser: false, quote: false, busy: true };
   const b = new EmbeddedBrowser({ BrowserWindow: FakeWindow, authorize: () => permission });
@@ -146,7 +189,7 @@ test("login migration rejects busy browsers, invalidates stale login inspection 
     assert.ok(!JSON.stringify(b.info()).includes("synthetic-only"));
   } finally { b.close(); }
 });
-test("workbench environment and browser endpoints show login with Agent off, without a worker", async () => {
+test("workbench environment and browser endpoints show login with default browser capability, without a worker", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rfq-status-test-"));
   fs.mkdirSync(path.join(root, "data/case-catalog"), { recursive: true });
   fs.writeFileSync(path.join(root, "data/case-catalog/cases.json"), '{"cases":[],"counts":{"cases":0}}');
@@ -164,10 +207,10 @@ test("workbench environment and browser endpoints show login with Agent off, wit
     assert.equal(browser.checks.find((x) => x.key === "login").state, "已登录");
     const environment = await get("api/env/check?force=1");
     assert.equal(environment.ok, true); assert.equal(environment.status, "checked");
-    assert.equal(environment.browser.browserEnabled, false); assert.equal(b.lease, null);
+    assert.equal(environment.browser.browserEnabled, true); assert.equal(b.lease, null);
     assert.equal(b.info().cdpAttached, false);
     service.console.searchTerms = ["fixture"];
-    assert.throws(() => service.console.start({ kind: "scan", term: "fixture", limit: 1 }), /开启浏览器/);
+    assert.throws(() => service.console.start({ kind: "once", term: "fixture", limit: 1 }), /API Key/);
     service.console.current = { status: "running" };
     b.window.webContents.debugger.sendCommand = () => assert.fail("busy task must not be inspected");
     assert.equal((await get("api/env/check?force=1")).browser.busy, true);
@@ -221,4 +264,31 @@ test("public My Alibaba navigation never overrides an explicit signed-out or CAP
   await assert.rejects(assertAlibabaReady(page("My Alibaba\nQuote Now\nYou have not signed in. Please sign in to obtain quoting rights.")), /login is required/);
   await assert.rejects(assertAlibabaReady(page("My Alibaba 安全验证 滑块")), /verification challenge/);
   await assertAlibabaReady(page("My Alibaba\n退出\n立即报价"));
+});
+test("task and workbench use the same account-nav evidence on an RFQ detail page", async () => {
+  const evidence = { body: "Sign In for more services\nMy Alibaba\nRFQ detail", accountHeader: true, loginEntry: false, logoutEntry: false };
+  assert.equal(alibabaLoginStatus(evidence, "https://sourcing.alibaba.com/rfq_detail.htm"), "logged_in");
+  const page = { url: () => "https://sourcing.alibaba.com/rfq_detail.htm", evaluateJson: async () => evidence };
+  await assertAlibabaReady(page);
+  evidence.loginEntry = true;
+  assert.equal(alibabaLoginStatus(evidence, page.url()), "login_required");
+  await assert.rejects(assertAlibabaReady(page), /login is required/);
+  evidence.loginEntry = false; evidence.body += "\nYou have not signed in. Please sign in to obtain quoting rights.";
+  await assert.rejects(assertAlibabaReady(page), /login is required/);
+  evidence.body = "My Alibaba\nRFQ detail"; evidence.accountHeader = false;
+  await assert.rejects(assertAlibabaReady(page), /could not be verified/);
+});
+test("RFQ detail waits for the account navigation to settle after page load", async () => {
+  let reads = 0;
+  const page = { url: () => "https://sourcing.alibaba.com/rfq_detail.htm?event=login",
+    evaluateJson: async () => {
+      reads++;
+      return reads < 3
+        ? { body: "My Alibaba\nRFQ detail", accountHeader: true, loginEntry: true, logoutEntry: false }
+        : { body: "My Alibaba\nRFQ detail", accountHeader: true, loginEntry: false, logoutEntry: true };
+    } };
+  await assertAlibabaReady(page, { waitMs: 150, intervalMs: 1 });
+  assert.equal(reads, 3);
+  assert.equal(alibabaLoginStatus({ body: "RFQ detail", accountHeader: true, loginEntry: false, logoutEntry: false }, page.url()), "logged_in");
+  assert.equal(alibabaLoginStatus({ body: "You have not signed in", accountHeader: true, loginEntry: false, logoutEntry: true }, page.url()), "logged_in");
 });

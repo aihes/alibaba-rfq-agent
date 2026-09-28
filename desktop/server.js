@@ -1,13 +1,22 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import AdmZip from "adm-zip";
 import { OperatorConsole } from "./console.js";
 import { BrowserExtension } from "./extension.js";
 import { createNotificationTools } from "../src/notification-tools.js";
+import { readQuoteImage } from "../src/quote-images.js";
 
 const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp" };
 const csp = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+function safeProbeError(error, environment) {
+  let message = String(error?.message || "服务调用失败");
+  for (const key of ["MODEL_API_KEY", "GLM_OCR_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]) {
+    if (environment[key]) message = message.replaceAll(environment[key], "[redacted]");
+  }
+  return message.slice(0, 250);
+}
 function contained(file, directory) {
   const real = fs.realpathSync(file), root = fs.realpathSync(directory);
   if (!real.startsWith(root + path.sep)) throw new Error("文件超出允许范围");
@@ -18,7 +27,7 @@ function contained(file, directory) {
  * 操作。所有证据文件由 catalog 白名单选取，客户端不能指定绝对路径。
  */
 export async function createCaseServer(options) {
-  const { resources, workspace, port = 0, desktopSettings, importData, importBrowserLogin, testLocalClaude, notify, notifyToken, toolToken, embeddedBrowser, browserToken } = options;
+  const { resources, workspace, port = 0, desktopSettings, importData, importBrowserLogin, testLocalClaude, testOcr, notify, notifyToken, toolToken, embeddedBrowser, browserToken } = options;
   const console = new OperatorConsole(options);
   const tools = createNotificationTools({ workspace, file: console.settingsFile,
     ...(notify ? { send: notify } : {}) });
@@ -85,6 +94,7 @@ export async function createCaseServer(options) {
           if (Object.keys(payload).some((key) => !["tool", "arguments"].includes(key))) throw new Error("通知工具参数无效");
           result = await tools.call(payload.tool, payload.arguments);
         } else if (route === "/api/ops/start") result = console.start(payload);
+        else if (route === "/api/quotes/archive") result = console.archiveQuote(payload);
         else if (route === "/api/ops/stop") { empty(); result = console.stop(); }
         else if (route === "/api/ops/settings") result = console.updateSettings(payload);
         else if (route === "/api/ops/quote/start") result = await console.startQuote(payload);
@@ -96,6 +106,9 @@ export async function createCaseServer(options) {
           empty(); console.assertIdle(); result = await desktopSettings.refreshEnvironment();
         } else if (route === "/api/desktop/model/test" && desktopSettings) {
           empty(); console.assertIdle();
+          // 只有显式点击才实际调用模型。失败结果也记入本次进程的环境状态；
+          // GET 环境检查永远不触发付费请求。
+          try {
           const { callModelHttp } = await import("../src/model-http.js");
           const v = desktopSettings.resolved().value;
           let data;
@@ -119,6 +132,42 @@ export async function createCaseServer(options) {
           else data = await callModelHttp({ modelApiKey: v.modelApiKey, modelApiUrl: v.modelApiUrl, modelName: v.modelName }, "Return JSON only: {\"ok\":true}", { test: true }, 256);
           if (data.ok !== true) throw new Error("模型返回格式不符合要求");
           result = { ok: true, detail: "模型连接成功；测试仅发送固定文本，会产生少量模型用量" };
+          console.recordServiceCheck("model", true, "固定文本请求成功，模型返回格式正确");
+          } catch (error) {
+            const message = safeProbeError(error, desktopSettings.environment());
+            console.recordServiceCheck("model", false, message);
+            throw new Error(message);
+          }
+        } else if (route === "/api/desktop/ocr/test" && desktopSettings) {
+          empty(); console.assertIdle();
+          try {
+            const env = desktopSettings.environment();
+            if (env.OCR_PROVIDER === "off") throw new Error("图片识别已关闭，请先在设置中开启");
+            if (!env.GLM_OCR_API_KEY) throw new Error("未配置 GLM OCR API Key，请检查设置或本机环境变量");
+            let ocr;
+            if (testOcr) ocr = await testOcr(env);
+            else {
+              const { default: sharp } = await import("sharp");
+              const { extractImageText } = await import("../src/ocr.js");
+              const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rfq-ocr-check-"));
+              try {
+                // 固定样张只含测试文字，不上传用户 RFQ 或浏览器内容。
+                const svg = '<svg width="640" height="180" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="white"/><text x="34" y="112" font-family="Arial,sans-serif" font-size="72" font-weight="bold" fill="black">RFQ 123</text></svg>';
+                const image = path.join(directory, "probe.png");
+                fs.writeFileSync(image, await sharp(Buffer.from(svg)).png().toBuffer());
+                ocr = await extractImageText(image, { ocrProvider: env.OCR_PROVIDER, ocrApiKey: env.GLM_OCR_API_KEY,
+                  ocrApiUrl: env.GLM_OCR_API_URL, ocrTimeoutMs: 30000 });
+              } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+            }
+            if (ocr?.status !== "read" || !/RFQ/i.test(ocr.text || "") || !/123/.test(ocr.text || ""))
+              throw new Error(ocr?.error || "OCR 已响应，但未能正确识别测试样张 RFQ 123");
+            result = { ok: true, detail: "OCR 连接成功，已识别内置样张 RFQ 123；会产生少量 OCR 用量" };
+            console.recordServiceCheck("ocr", true, "内置样张 RFQ 123 识别成功");
+          } catch (error) {
+            const message = safeProbeError(error, desktopSettings.environment());
+            console.recordServiceCheck("ocr", false, message);
+            throw new Error(message);
+          }
         } else if (route === "/api/desktop/import" && importData) { empty(); console.assertIdle(); result = await importData(console); }
         else return fail(404, "操作不存在");
         return reply(200, result);
@@ -140,8 +189,16 @@ export async function createCaseServer(options) {
       if (route === "/api/tools/notifications") return reply(200, { tools: tools.definitions, ...tools.status() });
       if (route === "/api/catalog") return reply(200, getCatalog());
       if (route === "/api/ops/status") return reply(200, console.snapshot());
+      if (route === "/api/ops/stage") return reply(200, console.stageDetail(Number(url.searchParams.get("index"))));
       if (route === "/api/env/check") return reply(200, await console.envCheck(url.searchParams.get("force") === "1"));
       if (route === "/api/quotes") return reply(200, await console.listQuotes());
+      if (route === "/api/quote/image") {
+        const index = url.searchParams.get("index");
+        const image = /^(0|[1-9]\d*)$/.test(index || "")
+          ? readQuoteImage(workspace, url.searchParams.get("draft"), Number(index)) : null;
+        if (!image) return fail(404, "这张 RFQ 图片未保存在本机");
+        return reply(200, fs.readFileSync(image.file), image.type);
+      }
       if (route === "/api/extension") return reply(200, extension.info());
       if (route === "/api/extension/download") return reply(200, extension.bytes(), "application/zip", extension.metadata.archive);
       if (["/api/quote", "/api/quote/screenshot"].includes(route)) {

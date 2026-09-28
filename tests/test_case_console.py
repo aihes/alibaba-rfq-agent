@@ -43,9 +43,9 @@ class ConsoleTest(unittest.TestCase):
                 return ImmediateProcess()
 
             console = OperatorConsole(ops_dir=Path(temp), popen=fake_popen)
-            with self.assertRaisesRegex(ConsoleError, "开启浏览器操作"):
-                console.start({"kind": "once"})
-            console.update_settings({"browserEnabled": True})
+            self.assertTrue(console.snapshot()["settings"]["browserEnabled"])
+            with self.assertRaisesRegex(ConsoleError, "默认可用"):
+                console.update_settings({"browserEnabled": False})
             with self.assertRaisesRegex(ConsoleError, "不支持"):
                 console.start({"kind": "submit"})
             with self.assertRaisesRegex(ConsoleError, "已配置"):
@@ -70,7 +70,6 @@ class ConsoleTest(unittest.TestCase):
                 return ImmediateProcess()
 
             console = OperatorConsole(ops_dir=Path(temp), popen=fake_popen)
-            console.update_settings({"browserEnabled": True})
             # 即使服务启动的 shell 限定了子集，页面“全部”仍必须覆盖它。
             with mock.patch.dict(case_console.os.environ, {"SEARCH_TERMS": "cloth bag"}):
                 console.start({"kind": "scan", "term": "__all__"})
@@ -91,7 +90,6 @@ class ConsoleTest(unittest.TestCase):
     def test_env_check_parses_bridge_status(self):
         with tempfile.TemporaryDirectory() as temp:
             console = OperatorConsole(ops_dir=Path(temp))
-            console.update_settings({"browserEnabled": True})
             process = mock.Mock(returncode=0)
             process.communicate.return_value = ('{"connected": true, "loggedIn": true, "tabId": 42}\n', '')
             console.popen = mock.Mock(return_value=process)
@@ -107,16 +105,15 @@ class ConsoleTest(unittest.TestCase):
             self.assertEqual(cached["checkedAt"], report["checkedAt"])
             console.popen.assert_called_once()
 
-            # force 和成功缓存都不能绕过已关闭的浏览器授权。
-            console.update_settings({"browserEnabled": False})
-            self.assertEqual(console.env_check(force=True)["status"], "skipped")
-            self.assertFalse(console.env_check()["ok"])
-            console.popen.assert_called_once()
+            # 旧版关闭值不再影响检测；强制刷新会发起新的一轮状态检查。
+            with self.assertRaisesRegex(ConsoleError, "默认可用"):
+                console.update_settings({"browserEnabled": False})
+            self.assertEqual(console.env_check(force=True)["status"], "checked")
+            self.assertEqual(console.popen.call_count, 2)
 
     def test_env_check_reports_disconnected_bridge(self):
         with tempfile.TemporaryDirectory() as temp:
             console = OperatorConsole(ops_dir=Path(temp))
-            console.update_settings({"browserEnabled": True})
             process = mock.Mock(returncode=1)
             process.communicate.return_value = ('', '')
             console.popen = mock.Mock(return_value=process)
@@ -126,11 +123,10 @@ class ConsoleTest(unittest.TestCase):
             self.assertFalse(by_key["bridge"]["ok"])
             self.assertFalse(by_key["login"]["ok"])
 
-    def test_env_check_never_connects_when_disabled_or_task_is_running(self):
+    def test_env_check_never_connects_while_task_is_running(self):
         with tempfile.TemporaryDirectory() as temp:
             console = OperatorConsole(ops_dir=Path(temp), popen=mock.Mock())
-            self.assertEqual(console.env_check(force=True)["status"], "skipped")
-            console.update_settings({"browserEnabled": True})
+            self.assertTrue(console.snapshot()["settings"]["browserEnabled"])
             console.current = {"kind": "scan", "status": "running"}
             self.assertEqual(console.env_check(force=True)["status"], "skipped")
             console.popen.assert_not_called()
@@ -138,7 +134,7 @@ class ConsoleTest(unittest.TestCase):
     def test_env_check_owns_browser_until_probe_completes(self):
         with tempfile.TemporaryDirectory() as temp:
             console = OperatorConsole(ops_dir=Path(temp))
-            console.update_settings({"browserEnabled": True, "quoteEnabled": True})
+            console.update_settings({"quoteEnabled": True})
 
             def communicate(**_kwargs):
                 self.assertTrue(console.snapshot()["envChecking"])
@@ -156,7 +152,7 @@ class ConsoleTest(unittest.TestCase):
             self.assertFalse(console.snapshot()["envChecking"])
             console.popen.assert_called_once()
 
-    def test_disabling_browser_cancels_live_probe_and_discards_result(self):
+    def test_closing_console_cancels_live_probe_and_discards_result(self):
         with tempfile.TemporaryDirectory() as temp:
             started = threading.Event()
             children = []
@@ -170,15 +166,13 @@ class ConsoleTest(unittest.TestCase):
                 return child
 
             console = OperatorConsole(ops_dir=Path(temp), popen=fake_status)
-            console.update_settings({"browserEnabled": True})
             result = {}
             thread = threading.Thread(target=lambda: result.update(console.env_check()))
             thread.start()
             try:
                 self.assertTrue(started.wait(2))
                 self.assertTrue(console.snapshot()["envChecking"])
-                console.update_settings({"browserEnabled": False})
-                console.update_settings({"browserEnabled": True})
+                console.close()
                 thread.join(2)
                 self.assertFalse(thread.is_alive())
                 self.assertLess(children[0].returncode, 0)
@@ -198,22 +192,20 @@ class ConsoleTest(unittest.TestCase):
                 return child
 
             console = OperatorConsole(ops_dir=Path(temp), popen=fake_status)
-            console.update_settings({"browserEnabled": True})
             with mock.patch.object(case_console, "ENV_CHECK_TIMEOUT_SECONDS", 0.03):
                 report = console.env_check()
             self.assertFalse(report["ok"])
             self.assertLess(children[0].returncode, 0)
             self.assertFalse(console.snapshot()["envChecking"])
 
-    def test_disabling_browser_stops_owned_process(self):
+    def test_stop_button_stops_owned_process(self):
         with tempfile.TemporaryDirectory() as temp:
             console = OperatorConsole(ops_dir=Path(temp))
             console._command = lambda *_: [sys.executable, "-c", "import time; time.sleep(30)"]
-            console.update_settings({"browserEnabled": True})
             try:
                 console.start({"kind": "scan"})
                 self.assertEqual(console.snapshot()["run"]["status"], "running")
-                console.update_settings({"browserEnabled": False})
+                console.stop()
                 for _ in range(50):
                     if console.snapshot()["run"]["status"] == "stopped":
                         break
@@ -228,7 +220,6 @@ class ConsoleTest(unittest.TestCase):
             (root / "scripts").mkdir()
             (root / "scripts/build_case_catalog.mjs").write_text("import fs from 'node:fs'; fs.writeFileSync('indexed', 'ok');\n")
             console = OperatorConsole(root=root, ops_dir=root / "ops", popen=lambda *_args, **_kwargs: ImmediateProcess())
-            console.update_settings({"browserEnabled": True})
             console.start({"kind": "once"})
             for _ in range(100):
                 if console.snapshot()["run"]["status"] == "completed":
@@ -259,9 +250,9 @@ class ConsoleTest(unittest.TestCase):
             }
             request = {"kind": "submit", "draftId": "rfq-exact", "reviewHash": "a" * 64,
                        "confirmation": "rfq-exact", "approved": True}
-            with self.assertRaisesRegex(ConsoleError, "开启浏览器操作和浏览器报价"):
+            with self.assertRaisesRegex(ConsoleError, "逐单浏览器报价模式"):
                 console.start_quote(request)
-            console.update_settings({"browserEnabled": True, "quoteEnabled": True})
+            console.update_settings({"quoteEnabled": True})
             with self.assertRaisesRegex(ConsoleError, "重新审阅"):
                 console.start_quote({**request, "reviewHash": "b" * 64})
             with self.assertRaisesRegex(ConsoleError, "完整 ID"):
@@ -292,20 +283,20 @@ class ConsoleTest(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                payload = json.dumps({"browserEnabled": True})
+                payload = json.dumps({"alertsEnabled": False})
                 connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
                 connection.request("POST", "/api/ops/settings", payload,
                                    {"Content-Type": "application/json", "X-Case-Console": "1", "Origin": "https://other.example"})
                 self.assertEqual(connection.getresponse().status, 403)
                 connection.close()
-                self.assertFalse(server.console.snapshot()["settings"]["browserEnabled"])
+                self.assertTrue(server.console.snapshot()["settings"]["browserEnabled"])
                 connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
                 connection.request("POST", "/api/ops/settings", payload,
                                    {"Content-Type": "application/json", "X-Case-Console": "1",
                                     "Origin": f"http://127.0.0.1:{server.server_port}"})
                 response = connection.getresponse()
                 self.assertEqual(response.status, 200)
-                self.assertTrue(json.loads(response.read())["settings"]["browserEnabled"])
+                self.assertFalse(json.loads(response.read())["settings"]["alertsEnabled"])
                 connection.close()
             finally:
                 server.shutdown()
@@ -325,7 +316,7 @@ class ConsoleTest(unittest.TestCase):
                 environment = run.call_args.kwargs["env"]
                 self.assertEqual(environment["RFQ_CONSOLE_URL"], "http://localhost:8889/")
                 self.assertEqual(environment["RFQ_CONSOLE_SETTINGS_FILE"], str(console.settings_file.resolve()))
-                self.assertFalse(console.snapshot()["settings"]["browserEnabled"])
+                self.assertTrue(console.snapshot()["settings"]["browserEnabled"])
                 self.assertFalse(console.snapshot()["settings"]["quoteEnabled"])
                 restored = OperatorConsole(ops_dir=Path(temp))
                 self.assertTrue(restored.snapshot()["settings"]["notificationsEnabled"])

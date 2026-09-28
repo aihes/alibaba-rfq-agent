@@ -50,7 +50,7 @@ test("tool rechecks current rules rather than trusting a historical quoted flag"
     await assert.rejects(tools.call("notifications.opportunity", { draftId: "outside" }), /允许目录/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
-test("HTTP tool credentials are scoped to notification tools and cannot enable browser access", async () => {
+test("HTTP tool credentials are scoped to notification tools and cannot change desktop settings", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rfq-tool-http-")); seed(root);
   let calls = 0;
   const token = "a".repeat(64);
@@ -63,23 +63,25 @@ test("HTTP tool credentials are scoped to notification tools and cannot enable b
     assert.equal((await post("api/tools/notifications", "wrong", { tool: "notifications.test" })).status, 403);
     assert.equal((await post("api/ops/settings", token, { browserEnabled: true })).status, 403);
     assert.equal((await (await post("api/tools/notifications", token, { tool: "notifications.test" })).json()).status, "accepted");
-    assert.equal(calls, 1); assert.equal(service.console.settings.browserEnabled, false);
+    assert.equal(calls, 1); assert.equal(service.console.settings.browserEnabled, true);
+    assert.equal(service.console.settings.quoteEnabled, false);
     assert.equal((await post("api/tools/notifications", token, { tool: "notifications.opportunity", arguments: { draftId: "rfq-tool", message: "forged" } })).status, 409);
   } finally { await service.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 test("native adapter reports OS acceptance/failure and notification click opens only the exact draft", async () => {
-  const made = [], opened = [];
+  const made = [], opened = [], raised = [];
   let mode = "show";
   class FakeNotification extends EventEmitter {
     static isSupported() { return true; }
     constructor(options) { super(); this.options = options; made.push(this); }
     show() { if (mode) queueMicrotask(() => this.emit(mode)); }
   }
-  const notifier = createNativeNotifier({ Notification: FakeNotification, openDraft: (id) => opened.push(id), waitMs: 10 });
+  const notifier = createNativeNotifier({ Notification: FakeNotification, openDraft: (id) => opened.push(id), showOpportunity: () => raised.push(true), waitMs: 10 });
   assert.equal((await notifier.send({ message: "Untrusted\ntext", draftId: "rfq-tool" })).status, "accepted");
+  assert.equal(raised.length, 1);
   assert.equal(made[0].options.id, "rfq-rfq-tool"); assert.ok(!made[0].options.body.includes("\n"));
   made[0].emit("click"); assert.deepEqual(opened, ["rfq-tool"]);
   await assert.rejects(notifier.send({ draftId: "../../private" }), /ID/);
-  mode = "failed"; assert.equal((await notifier.send({ test: true })).status, "failed");
+  mode = "failed"; assert.equal((await notifier.send({ test: true })).status, "failed"); assert.equal(raised.length, 1);
   mode = null; assert.equal((await notifier.send({ test: true })).status, "requested");
 });

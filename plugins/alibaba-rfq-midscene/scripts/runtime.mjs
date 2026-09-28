@@ -10,6 +10,7 @@ import { loadConfig, projectDir } from "../../../src/config.js";
 import { createDraft } from "../../../src/drafter.js";
 import { fillQuoteForm, submissionToken } from "../../../src/form.js";
 import { priceRfq } from "../../../src/pricing.js";
+import { reportProgress, reportProgressResult } from "../../../src/progress.js";
 import { parseNumber, stableRfqId, writeJson } from "../../../src/utils.js";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -251,8 +252,14 @@ export async function scanRfqs({ searchTerm, maxCards = 20 }) {
   if (!String(searchTerm || "").trim()) throw new Error("searchTerm is required");
   const config = loadConfig();
   config.maxCardsPerSearch = clamp(maxCards, 1, 30);
+  const connectStage = reportProgress("connect", "正在连接应用内浏览器", {}, { target: "Alibaba 浏览器", task: "只读取 RFQ 列表" });
   return withBrowser(config, async ({ page, provider, browserMode }) => {
+    reportProgressResult(connectStage, { connected: true, provider, browserMode });
+    const searchStage = reportProgress("search", `正在搜索：${searchTerm}`, {}, { searchTerm, maxCards: config.maxCardsPerSearch });
     const cards = await collectSearchPage(page, config, String(searchTerm).trim());
+    reportProgressResult(searchStage, { count: cards.length, cards: cards.map(({ id, title, summary, quantityText }) =>
+      ({ id, title, summary, quantityText })) });
+    const saveStage = reportProgress("save", `已找到 ${cards.length} 条 RFQ，正在保存扫描结果`, {}, { searchTerm, count: cards.length });
     const runId = `${compactTimestamp()}-${slug(searchTerm)}`;
     const paths = runPaths(runId);
     const record = {
@@ -283,6 +290,9 @@ export async function scanRfqs({ searchTerm, maxCards = 20 }) {
     };
     fs.writeFileSync(paths.scanPath, `${JSON.stringify(record, null, 2)}\n`);
     writeRunReport(runId);
+    reportProgressResult(saveStage, { runId, fileName: path.basename(paths.scanPath), saved: cards.length });
+    const completeStage = reportProgress("complete", `扫描完成：${cards.length} 条 RFQ`, {}, { searchTerm, count: cards.length });
+    reportProgressResult(completeStage, { runId, cards: cards.map(({ id, title }) => ({ id, title })) });
     return {
       ...record,
       outputPath: paths.scanPath,

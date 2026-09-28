@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, ipcMain, clipboard, Menu, Tray, nativeImage, Notification, dialog, shell, safeStorage } from "electron";
+import { app, BrowserWindow, WebContentsView, ipcMain, clipboard, Menu, Tray, nativeImage, Notification, dialog, shell, safeStorage, session } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -10,7 +10,8 @@ import { OperatorConsole } from "./console.js";
 import { createCaseServer } from "./server.js";
 import { importCaseData } from "./import-data.js";
 import { createNativeNotifier } from "./native-notifications.js";
-import { EmbeddedBrowser } from "./embedded-browser.js";
+import { EmbeddedBrowser, RFQ_PARTITION } from "./embedded-browser.js";
+import { AlibabaSessionBackup } from "./alibaba-session-backup.js";
 
 const resources = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 app.setName("RFQ 助手");
@@ -19,7 +20,7 @@ if (process.env.RFQ_DESKTOP_DATA_DIR) app.setPath("userData", path.resolve(proce
 const workspace = path.join(app.getPath("userData"), "workspace");
 process.env.RFQ_WORKSPACE_DIR = workspace;
 process.env.RFQ_DESKTOP = "1";
-let window, tray, service, quitting = false, quitReady = false;
+let window, tray, service, sessionBackup, quitting = false, quitReady = false;
 const token = crypto.randomBytes(32).toString("hex");
 const toolToken = crypto.randomBytes(32).toString("hex");
 const browserToken = crypto.randomBytes(32).toString("hex");
@@ -28,13 +29,16 @@ const embeddedBrowser = new EmbeddedBrowser({ BrowserWindow, WebContentsView, ip
   quote: service?.console.settings.quoteEnabled === true && service?.console.current?.kind.startsWith("quote_"),
   busy: Boolean(service?.console.current || service?.console.probe || service?.console.quotePreparing || service?.console.browserImporting),
   stopping: quitting || ["stopping", "indexing"].includes(service?.console.current?.status)
-}) });
+}), sessionPersistence: () => ({ enabled: sessionBackup?.enabled === true, error: sessionBackup?.lastError || null }),
+  beforeNavigate: async () => { await sessionBackup?.retry(); } });
 const connectionFile = path.join(workspace, "data/case-catalog/ops/notification-tools-connection.json");
 const notifier = createNativeNotifier({ Notification, openDraft: (draftId) => {
   if (!service) return;
   const url = new URL(service.url); url.searchParams.set("view", "console");
   if (draftId) url.searchParams.set("draft", draftId);
   show(url.href);
+}, showOpportunity: () => {
+  if (window && !window.isDestroyed() && !window.isFocused()) window.showInactive();
 } });
 
 function show(url) {
@@ -81,7 +85,10 @@ else {
     // 退出应用才停止任务；关闭窗口进入后台。应用不保活电脑，休眠时
     // 无法持续监听。先撤销浏览器控制，再结束子任务和应用自己的窗口。
     (async () => {
-      embeddedBrowser.invalidate(); await service?.close(); embeddedBrowser.close(); fs.rmSync(connectionFile, { force: true });
+      embeddedBrowser.invalidate(); await service?.close();
+      try { await sessionBackup?.flush(); await embeddedBrowser.flushSession(); }
+      catch { console.warn("阿里巴巴浏览器会话写入失败；下次打开可能需要重新登录"); }
+      sessionBackup?.close(); embeddedBrowser.close(); fs.rmSync(connectionFile, { force: true });
       tray?.destroy(); quitReady = true; app.quit();
     })().catch(() => { quitReady = true; app.exit(1); });
   });
@@ -90,6 +97,13 @@ else {
   app.whenReady().then(async () => {
   app.setAppUserModelId("com.rfq.assistant");
   try {
+    // 必须在打开 Alibaba 页面前恢复 session Cookie；否则页面第一次
+    // 请求已被判为未登录，即使稍后补 Cookie 也会停在登录页。
+    sessionBackup = new AlibabaSessionBackup({
+      browserSession: session.fromPartition(RFQ_PARTITION),
+      userData: app.getPath("userData")
+    });
+    await sessionBackup.start();
     fs.mkdirSync(path.join(workspace, "config"), { recursive: true });
     for (const name of ["default.json", "pricing-rules.json"]) {
       const target = path.join(workspace, "config", name);

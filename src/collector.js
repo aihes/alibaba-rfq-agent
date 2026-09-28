@@ -12,7 +12,7 @@ export async function collectSearchPage(page, config, searchTerm) {
   const url = buildSearchUrl(config.searchBaseUrl, searchTerm);
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
   await page.locator(".alife-bc-brh-rfq-list__item").first().waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
-  await assertAlibabaReady(page);
+  await assertAlibabaReady(page, { waitMs: 5000 });
 
   const cards = await page.locator(".alife-bc-brh-rfq-list__item").evaluateAll((items, maxCards) => items.slice(0, maxCards).map((item) => {
     const text = (selector) => item.querySelector(selector)?.textContent?.trim() || "";
@@ -57,7 +57,7 @@ export async function hydrateDetail(page, rfq, config) {
   await sleep(config.navigationDelayMs);
   await page.goto(rfq.detailUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
   await page.locator(".rfq-detail-info-body, .brh-rfq-detail").first().waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
-  await assertAlibabaReady(page);
+  await assertAlibabaReady(page, { waitMs: 5000 });
   const detail = await page.locator(".rfq-detail-info-body").first().innerText({ timeout: 15000 }).catch(async () => {
     return page.locator(".brh-rfq-detail").first().innerText({ timeout: 15000 });
   });

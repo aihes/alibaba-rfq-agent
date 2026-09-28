@@ -51,12 +51,14 @@ class OperatorConsole:
         self.current = None
         self.settings_file = self.ops_dir / "settings.json"
         self.last_run_file = self.ops_dir / "last-run.json"
-        self.settings = {"browserEnabled": False, "quoteEnabled": False, "alertsEnabled": True, "notificationsEnabled": False}
+        # Legacy Python 入口与桌面/Node 工作台保持一致：浏览器能力默认
+        # 可用，旧设置中的 browserEnabled=false 不再生效。
+        self.settings = {"browserEnabled": True, "quoteEnabled": False, "alertsEnabled": True, "notificationsEnabled": False}
         self.notifications_url = "http://localhost:8888/"
         if self.settings_file.exists():
             try:
                 saved = json.loads(self.settings_file.read_text())
-                self.settings.update({key: saved[key] for key in ("browserEnabled", "alertsEnabled", "notificationsEnabled") if type(saved.get(key)) is bool})
+                self.settings.update({key: saved[key] for key in ("alertsEnabled", "notificationsEnabled") if type(saved.get(key)) is bool})
             except (OSError, ValueError):
                 pass
         self.last_run = None
@@ -74,10 +76,10 @@ class OperatorConsole:
         self._env_generation = 0
 
     def env_check(self, force=False):
-        """检查本地依赖；只有授权且浏览器空闲时才实际探测 Bridge。
+        """检查本地依赖；浏览器空闲时才实际探测 Bridge。
 
-        force 仅绕过结果缓存，不能绕过总开关、任务互斥或检测互斥。
-        检测的长等待放在锁外，避免 30 秒超时阻塞关闭开关和停止任务。
+        force 仅绕过结果缓存，不能绕过任务互斥或检测互斥。
+        检测的长等待放在锁外，避免 30 秒超时阻塞停止任务。
         """
         node = shutil.which("node")
         cli = self.root / "plugins/alibaba-rfq-midscene/scripts/cli.mjs"
@@ -97,10 +99,7 @@ class OperatorConsole:
                     "checkedAt": now(), "status": status}
 
         with self.lock:
-            # 必须先判断授权和任务状态，再读缓存：旧的“已连接”结果不能
-            # 在关闭开关后继续显示，也不能鼓励用户在运行中重新连接 Bridge。
-            if not self.settings["browserEnabled"]:
-                return report("skipped", "浏览器控制已关闭；开启后才检测连接和登录态")
+            # 先判断任务状态再读缓存，避免在运行中重新连接 Bridge。
             if self.current is not None:
                 return report("skipped", "任务正在运行；为避免抢占浏览器，完成后再检测")
             if self._env_process is not None:
@@ -144,10 +143,10 @@ class OperatorConsole:
 
         with self.lock:
             # 释放占用与保存结果在同一个临界区完成，防止新任务在两者
-            # 之间启动。generation 也识别检测期间“关闭后重新开启”。
+            # 之间启动。generation 可识别检测期间服务关闭。
             self._env_process = None
-            if not self.settings["browserEnabled"] or generation != self._env_generation:
-                return report("skipped", "浏览器授权已变化；本次检测已取消，请重新检测")
+            if generation != self._env_generation:
+                return report("skipped", "应用状态已变化；本次检测已取消，请重新检测")
             if not isinstance(payload, dict):
                 by_key["bridge"]["detail"] = "检测超时或无输出；请确认 Chrome 已启动并启用 Midscene 扩展"
             elif payload.get("connected"):
@@ -216,21 +215,13 @@ class OperatorConsole:
     def update_settings(self, changes):
         if not isinstance(changes, dict) or not changes or any(key not in self.settings or type(value) is not bool for key, value in changes.items()):
             raise ConsoleError("开关参数无效")
+        if "browserEnabled" in changes:
+            raise ConsoleError("浏览器能力默认可用；请使用停止任务控制当前运行")
         with self.lock:
-            if changes.get("quoteEnabled") and not changes.get("browserEnabled", self.settings["browserEnabled"]):
-                raise ConsoleError("请先开启浏览器操作")
-            if "browserEnabled" in changes:
-                self._env_cache = None
-                if changes["browserEnabled"] != self.settings["browserEnabled"]:
-                    self._env_generation += 1
             self.settings.update(changes)
-            if not self.settings["browserEnabled"]:
-                self.settings["quoteEnabled"] = False
-                self._terminate_env_locked()
             atomic_json(self.settings_file, self.settings)
-            stop_browser = not self.settings["browserEnabled"] and self.current and self.current["kind"] != "refresh"
             stop_quote = not self.settings["quoteEnabled"] and self.current and self.current["kind"] in {"quote_fill", "quote_submit"}
-            if (stop_browser or stop_quote) and self.process and self.current["status"] != "indexing":
+            if stop_quote and self.process and self.current["status"] != "indexing":
                 self._stop_locked()
         return self.snapshot()
 
@@ -270,8 +261,8 @@ class OperatorConsole:
                 raise ConsoleError("已有任务正在运行，请先停止")
             if self._env_process is not None:
                 raise ConsoleError("环境检测正在进行，请等待检测完成")
-            if not self.settings["browserEnabled"] or not self.settings["quoteEnabled"]:
-                raise ConsoleError("请先开启浏览器操作和浏览器报价")
+            if not self.settings["quoteEnabled"]:
+                raise ConsoleError("请先选择逐单浏览器报价模式")
             review = self.review_quote(draft_id)
             if request.get("reviewHash") != review["reviewHash"]:
                 raise ConsoleError("草稿已变化，请重新审阅")
@@ -344,8 +335,6 @@ class OperatorConsole:
                 raise ConsoleError("已有任务正在运行，请先停止")
             if self._env_process is not None:
                 raise ConsoleError("环境检测正在进行，请等待检测完成")
-            if kind != "refresh" and not self.settings["browserEnabled"]:
-                raise ConsoleError("请先开启浏览器操作")
             command = self._command(kind, term, limit)
             run = {"id": uuid.uuid4().hex[:12], "kind": kind, "term": term if kind in {"scan", "once", "watch"} else None,
                    "limit": limit if kind in {"once", "watch"} else None, "status": "running", "startedAt": now(),

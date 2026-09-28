@@ -28,7 +28,9 @@ app.whenReady().then(async () => {
     const { createCaseServer } = await import("../desktop/server.js");
     const { fillQuotePage, submissionToken } = await import("../src/form.js");
     const { collectSearchPage, hydrateDetail } = await import("../src/collector.js");
-    let html = fs.readFileSync(path.join(resources, "tests/fixtures/quote-form.html"), "utf8").replace("<main>", `<main><p>My Alibaba</p>
+    // 公开页也会显示 My Alibaba；fixture 明确提供退出入口，才代表
+    // 已登录。这与内置浏览器的账号导航检测规则保持一致。
+    let html = fs.readFileSync(path.join(resources, "tests/fixtures/quote-form.html"), "utf8").replace("<main>", `<main><p>My Alibaba</p><a href="/logout">Log out</a>
       <article class="alife-bc-brh-rfq-list__item">
         <a class="brh-rfq-item__subject-link" href="/rfq_detail.htm?p=fixture">Fixture corrugated carton box</a>
         <p class="brh-rfq-item__detail">500 B flute cartons</p><p class="brh-rfq-item__quantity">500 Pieces</p>
@@ -55,6 +57,7 @@ app.whenReady().then(async () => {
     });
     service = await createCaseServer({ resources, workspace: root, desktop: true, embeddedBrowser: b, browserToken: token,
       desktopSettings: settings, importBrowserLogin: async () => ({ canceled: true }),
+      notify: async () => ({ status: "accepted", detail: "fixture system accepted; banner unverified" }),
       environment: () => ({ ...settings.environment(), RFQ_BROWSER_URL: `${service.url}api/desktop/browser/command`, RFQ_BROWSER_TOKEN: token }), revokeBrowser: () => b.invalidate() });
     const config = { electronBrowserUrl: `${service.url}api/desktop/browser/command`, electronBrowserToken: token, allowLiveSubmit: true, quotePort: "Shanghai" };
     const c = await connectElectronBrowser(config);
@@ -112,12 +115,12 @@ app.whenReady().then(async () => {
     assert.equal((await navState()).backDisabled, true);
     assert.match((await b.window.webContents.executeJavaScript("window.rfqTab.navigate('back')")).error, /任务或检测/);
     permission.busy = false; b.updateToolbar();
-    // 真实 Electron 上检查登录不需要打开 Agent 总开关，也不启动 worker。
+    // 默认浏览器能力不会自行启动任务；只读检查仍不建立控制 lease。
     const environment = await service.console.envCheck(true);
     assert.equal(environment.ok, true, JSON.stringify(environment.checks));
     assert.equal(environment.checks[2].label, "阿里巴巴浏览器");
     assert.equal(environment.checks[3].state, "已登录");
-    assert.equal(service.console.settings.browserEnabled, false);
+    assert.equal(service.console.settings.browserEnabled, true);
     assert.equal(b.lease, null); assert.equal(b.info().cdpAttached, false);
     // 仅在隔离 fixture 会话写入人工构造的 Cookie。这里不访问原 Chrome
     // 或生产用户目录，也不连接 Alibaba。验证 Chromium 确实接受迁移属性。
@@ -132,10 +135,138 @@ app.whenReady().then(async () => {
     assert.equal(b.info().inspection, null); assert.equal(b.lease, null); assert.equal(b.info().cdpAttached, false);
     assert.equal(permission.browser, false);
     permission.browser = false;
-    console.log(JSON.stringify({ ok: true, chromium: process.versions.chrome, assertions: ["HTTP private broker", "native CDP DOM read/write", "RFQ scan and detail extraction", "fill without submit", "exact submit confirmation", "verified fixture submit", "PNG evidence", "quote switch revocation", "hidden window reuse", "persistent isolated session", "local tab and copy-link UI", "read-only inspection with Agent disabled", "manual navigation and history", "workbench login status with Agent disabled", "synthetic Alibaba Cookie migration in isolated Chromium"], workspace: root, previewUrl: service.url }));
-    if (process.argv.includes("--preview")) {
-      ui = new BrowserWindow({ width: 1440, height: 940, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true } });
-      await ui.loadURL(`${service.url}?view=console`);
-    } else { await cleanup(); app.exit(0); }
+    // 旧任务失败只应作为历史记录展示；阶段卡片应说明停在哪一步，
+    // 原始调用栈默认折叠。这些记录仅存在隔离 fixture 工作区。
+    const runId = "fixture-progress";
+    const opsDir = path.join(root, "data/case-catalog/ops");
+    fs.mkdirSync(opsDir, { recursive: true });
+    service.console.last = { id: runId, kind: "once", status: "attention", alert: "任务在 RFQ 页面遇到登录提示，已停止分析",
+      startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), exitCode: 1, term: "carton", limit: 1 };
+    fs.writeFileSync(path.join(opsDir, `${runId}.progress.json`), JSON.stringify({ stage: "detail", message: "正在读取 RFQ 详情与附件", itemIndex: 1, itemTotal: 1, at: new Date().toISOString() }));
+    const eventFile = path.join(opsDir, `${runId}.progress.json.events.jsonl`);
+    const eventAt = new Date().toISOString();
+    fs.writeFileSync(eventFile, [
+      { stage: "connect", message: "正在连接应用内浏览器", at: eventAt },
+      { eventId: "fixture-search", stage: "search", message: "正在搜索 fixture", at: eventAt,
+        input: { searchTerm: "fixture", maxCards: 10 } },
+      { phase: "result", eventId: "fixture-search", stage: "result", at: eventAt, output: { count: 1, cards: [{ title: "Fixture amount" }] } },
+      { stage: "detail", message: "正在读取 RFQ 详情与附件", at: eventAt }
+    ].map((event) => JSON.stringify(event)).join("\n") + "\n");
+    fs.writeFileSync(path.join(opsDir, `${runId}.log`), "Error: Alibaba login is required\n    at fixture stack\n");
+    const draftDirectory = path.join(root, "data/drafts");
+    fs.mkdirSync(draftDirectory, { recursive: true });
+    const draftAt = "2026-09-28T08:10:00.000Z";
+    const draftFile = path.join(draftDirectory, "rfq-ui-draft.json");
+    const imageDirectory = path.join(root, "data/rfqs/rfq-ui-draft/images");
+    fs.mkdirSync(imageDirectory, { recursive: true });
+    const buyerImage = path.join(imageDirectory, "product-1.png");
+    fs.writeFileSync(buyerImage, png);
+    fs.writeFileSync(draftFile, JSON.stringify({ createdAt: draftAt, rfq: { id: "rfq-ui-draft", title: "Fixture amount", remainingQuotes: 2,
+      summary: "Buyer requests B flute carton", detailText: "Buyer needs 500 B flute cartons for export.", quantityText: "500 Pieces", country: "Ukraine",
+      detailUrl: "https://sourcing.alibaba.com/rfq_detail.htm?fixture=1", imageAssets: [{ filePath: buyerImage, capture: "download" }] },
+      analysis: { categoryId: "corrugated_box", recommendation: "quote", confidence: 0.9, missingRequired: [], riskFlags: [] },
+      quote: { status: "quoted", currency: "USD", quantity: 500, unitPriceUsd: 0.75, totalUsd: 375, setupUsd: 0, tradeTerm: "EXW" },
+      draft: { port: "Shanghai", productName: "Fixture carton", productDetails: "B flute", buyerMessage: "Fixture only" },
+      submission: { status: "skipped" } }));
+    fs.writeFileSync(path.join(draftDirectory, "rfq-conditional.json"), JSON.stringify({ createdAt: draftAt,
+      rfq: { id: "rfq-conditional", title: "Fixture conditional amount" },
+      analysis: { categoryId: "corrugated_box" },
+      quote: { status: "conditional_quote", currency: "USD", quantity: 500, unitPriceUsd: 0.75,
+        totalUsd: 375, setupUsd: 0, tradeTerm: "EXW" },
+      draft: { productName: "Carton", productDetails: "B flute", buyerMessage: "Conditional only" },
+      submission: { status: "skipped" } }));
+    fs.writeFileSync(path.join(draftDirectory, "rfq-no-price.json"), JSON.stringify({ createdAt: draftAt,
+      rfq: { id: "rfq-no-price", title: "Fixture needs review" },
+      analysis: { categoryId: "corrugated_box" }, quote: { status: "needs_review" },
+      submission: { status: "skipped" } }));
+    // 用真实 Chromium 检查用户点击后的应用内提醒；系统通知适配器
+    // 在 fixture 中注入，不向当前电脑发送真实通知或访问 Alibaba。
+    ui = new BrowserWindow({ width: 1440, height: 940, show: process.argv.includes("--preview"), webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true } });
+    await ui.loadURL(`${service.url}?view=console`);
+    const until = async (expression) => {
+      for (let i = 0; i < 100; i++) {
+        if (await ui.webContents.executeJavaScript(expression)) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      throw new Error(`Workbench notification UI did not reach: ${expression}`);
+    };
+    await until("document.querySelector('#ops-term').options.length > 0");
+    await until("document.querySelector('#run-progress-stage').textContent.includes('上次停在：读取 RFQ 详情')");
+    await until("document.querySelectorAll('#run-history li').length === 4");
+    const stageText = await ui.webContents.executeJavaScript("document.querySelector('#run-history').textContent");
+    assert.match(stageText, /正在连接应用内浏览器/);
+    assert.match(stageText, /正在搜索 fixture/);
+    await ui.webContents.executeJavaScript("document.querySelector('[data-stage-index=\"1\"]').open = true");
+    await until("document.querySelector('[data-stage-index=\"1\"] .stage-evidence').textContent.includes('Fixture amount')");
+    await until("document.querySelector('#priced-quote-list').textContent.includes('Fixture amount')");
+    assert.match(await ui.webContents.executeJavaScript("document.querySelector('#priced-quote-list').textContent"), /\$375/);
+    assert.doesNotMatch(await ui.webContents.executeJavaScript("document.querySelector('#quote-list').textContent"), /Fixture conditional amount|Fixture needs review/);
+    assert.doesNotMatch(await ui.webContents.executeJavaScript("document.querySelector('#priced-quote-list').textContent"), /Fixture conditional amount|Fixture needs review/);
+    assert.match(await ui.webContents.executeJavaScript("document.querySelector('.quote-status-help').textContent"), /需要人工复核 \/ 条件报价/);
+    assert.match(await ui.webContents.executeJavaScript("document.querySelector('#quote-list').textContent"), /生成于 2026/);
+    await until("document.querySelector('#quote-detail').textContent.includes('Buyer needs 500 B flute cartons for export')");
+    assert.match(await ui.webContents.executeJavaScript("document.querySelector('#quote-detail').textContent"), /Buyer needs 500 B flute cartons for export/);
+    assert.equal(await ui.webContents.executeJavaScript("document.querySelector('.quote-source-actions a')?.href"), "https://sourcing.alibaba.com/rfq_detail.htm?fixture=1");
+    await until("!document.querySelector('#console-workspace').hidden");
+    await ui.webContents.executeJavaScript("document.querySelector('[data-quote-image]').scrollIntoView({ block: 'center' })");
+    await until("document.querySelector('[data-quote-image] img')?.naturalWidth > 0");
+    await ui.webContents.executeJavaScript("document.querySelector('[data-quote-image]').click()");
+    assert.equal(await ui.webContents.executeJavaScript("document.querySelector('.quote-image-dialog').open"), true);
+    await ui.webContents.executeJavaScript("document.querySelector('.quote-image-close').click()");
+    assert.equal(await ui.webContents.executeJavaScript("document.querySelector('.quote-image-dialog').open"), false);
+    assert.match(await ui.webContents.executeJavaScript("document.querySelector('#submitted-quote-list').textContent"), /没有已验证提交/);
+    await ui.webContents.executeJavaScript("document.querySelector('#quote-search').value = 'B flute'; document.querySelector('#quote-search').dispatchEvent(new Event('input', { bubbles: true }))");
+    await until("document.querySelector('#quote-filter-count').textContent.includes('1 / 1')");
+    await ui.webContents.executeJavaScript("document.querySelector('#quote-status-filter').value = 'submitted'; document.querySelector('#quote-status-filter').dispatchEvent(new Event('change', { bubbles: true }))");
+    await until("document.querySelector('#quote-filter-count').textContent.includes('0 / 1')");
+    assert.equal(await ui.webContents.executeJavaScript("document.querySelector('#quote-workbench-grid').classList.contains('is-empty') && document.querySelector('#priced-quotes-section').hidden"), true);
+    await ui.webContents.executeJavaScript("document.querySelector('#quote-status-filter').value = 'all'; document.querySelector('#quote-status-filter').dispatchEvent(new Event('change', { bubbles: true }))");
+    await until("document.querySelector('#quote-filter-count').textContent.includes('1 / 1')");
+    await until("document.querySelector('#quote-detail [data-quote-archive=prompt]')?.disabled === false");
+    await ui.webContents.executeJavaScript("document.querySelector('#quote-detail [data-quote-archive=prompt]').click()");
+    await ui.webContents.executeJavaScript("document.querySelector('#quote-detail [data-quote-archive=confirm]').click()");
+    await until("document.querySelector('#quote-show-archived').textContent.includes('（1）')");
+    assert.ok(fs.existsSync(draftFile));
+    await ui.webContents.executeJavaScript("document.querySelector('#quote-show-archived').click()");
+    await until("document.querySelector('#quote-detail [data-quote-archive=restore]')?.disabled === false");
+    await ui.webContents.executeJavaScript("document.querySelector('#quote-detail [data-quote-archive=restore]').click()");
+    await until("document.querySelector('#quote-show-archived').textContent.includes('（0）')");
+    assert.ok(fs.existsSync(draftFile));
+    if (process.argv.includes("--screenshot")) {
+      await ui.webContents.executeJavaScript("window.scrollTo({ top: document.querySelector('#run-history').getBoundingClientRect().top + window.scrollY - 120, behavior: 'instant' })");
+      await new Promise(resolve => setTimeout(resolve, 300));
+      fs.writeFileSync(path.join(os.tmpdir(), "rfq-stage-ui-smoke.png"), (await ui.capturePage()).toPNG());
+      await ui.webContents.executeJavaScript("window.scrollTo({ top: document.querySelector('#priced-quotes-title').getBoundingClientRect().top + window.scrollY - 100, behavior: 'instant' })");
+      await new Promise(resolve => setTimeout(resolve, 300));
+      fs.writeFileSync(path.join(os.tmpdir(), "rfq-quote-ui-smoke.png"), (await ui.capturePage()).toPNG());
+      ui.setSize(390, 844);
+      await ui.webContents.executeJavaScript("window.scrollTo({ top: document.querySelector('#quote-detail').getBoundingClientRect().top + window.scrollY - 60, behavior: 'instant' })");
+      await new Promise(resolve => setTimeout(resolve, 300));
+      fs.writeFileSync(path.join(os.tmpdir(), "rfq-quote-mobile-smoke.png"), (await ui.capturePage()).toPNG());
+      ui.setSize(1440, 940);
+    }
+    assert.equal(await ui.webContents.executeJavaScript("document.querySelector('.run-log-details').open"), false);
+    assert.equal(await ui.webContents.executeJavaScript("document.querySelector('#ops-alert').textContent.includes('上次运行')"), true);
+    assert.equal(await ui.webContents.executeJavaScript("document.querySelector('#ops-alert').classList.contains('is-history')"), true);
+    service.console.last = { ...service.console.last, status: "running", finishedAt: null, alert: null };
+    fs.writeFileSync(path.join(opsDir, `${runId}.progress.json`), JSON.stringify({ stage: "analysis", message: "正在调用模型分析需求", itemIndex: 1, itemTotal: 2, at: new Date().toISOString() }));
+    await until("document.querySelector('#scan-action-help').textContent.includes('正在调用模型分析需求')");
+    assert.equal(await ui.webContents.executeJavaScript("document.querySelector('#scan-action-help').textContent.includes('需求 1/2')"), true);
+    service.console.last = { ...service.console.last, status: "attention", finishedAt: new Date().toISOString(), alert: "任务在 RFQ 页面遇到登录提示，已停止分析" };
+    await ui.webContents.executeJavaScript("document.querySelector('#notifications-enabled').click()");
+    await until("!document.querySelector('#notification-test').disabled");
+    await ui.webContents.executeJavaScript("document.querySelector('#notification-test').click()");
+    await until("!document.querySelector('#notification-toast').hidden && document.querySelector('#notification-toast-title').textContent.includes('测试')");
+    const { notifyOpportunity } = await import("../src/notifications.js");
+    const alertRecord = { rfq: { id: "rfq-ui-alert", title: "Fixture carton", remainingQuotes: 2, quoteUrl: "https://sourcing.alibaba.com/rfq/quote" },
+      analysis: { recommendation: "quote", confidence: 0.99, missingRequired: [], riskFlags: [] },
+      quote: { status: "quoted", currency: "USD", quantity: 500, unitPriceUsd: 1, totalUsd: 500, setupUsd: 0 },
+      draft: { port: "Shanghai", productName: "Carton", productDetails: "B flute", buyerMessage: "Please review" }, submission: { status: "skipped" } };
+    assert.equal((await notifyOpportunity(alertRecord, {}, { file: service.console.settingsFile, send: async () => ({ status: "accepted" }) })).status, "accepted");
+    await until("document.querySelector('#notification-toast-title').textContent.includes('可报价机会')");
+    assert.equal(await ui.webContents.executeJavaScript("document.querySelector('#notification-history-list').textContent.includes('Fixture carton')"), true);
+    console.log(JSON.stringify({ ok: true, chromium: process.versions.chrome, assertions: ["HTTP private broker", "native CDP DOM read/write", "RFQ scan and detail extraction", "fill without submit", "exact submit confirmation", "verified fixture submit", "PNG evidence", "quote switch revocation", "hidden window reuse", "persistent isolated session", "local tab and copy-link UI", "read-only inspection without task lease", "manual navigation and history", "workbench login status with browser capability on", "synthetic Alibaba Cookie migration in isolated Chromium", "stage history and collapsed technical log", "RFQ original link and local image preview", "priced draft, timestamp, reversible archive", "inline scan progress and item count", "in-app test and opportunity popups with history"], workspace: root, previewUrl: service.url,
+      ...(process.argv.includes("--screenshot") ? { screenshots: ["rfq-stage-ui-smoke.png", "rfq-quote-ui-smoke.png", "rfq-quote-mobile-smoke.png"].map((name) => path.join(os.tmpdir(), name)) } : {}) }));
+    if (!process.argv.includes("--preview")) { await cleanup(); app.exit(0); }
   } catch (error) { console.error(error.stack); await cleanup(); app.exit(1); }
 });

@@ -179,18 +179,19 @@ export async function notifyOpportunity(record, config, { file = settingsPath(),
     catch (error) { if (error.code === "EEXIST") return { status: "duplicate" }; throw error; }
     // 先落盘再发，重启/重复扫描时不会反复弹同一 RFQ。失败留记录，
     // 用户可用测试按钮排查；通知失败不能打断草稿保存和下一条分析。
-    state.attempts[draftId] = { status: "attempting", at: new Date().toISOString() };
+    const message = clean(`${record.rfq.title} · ${record.quote.quantity} 件 · USD ${record.quote.unitPriceUsd}/件 · 总计 USD ${record.quote.totalUsd}`);
+    state.attempts[draftId] = { status: "attempting", message, at: new Date().toISOString() };
     atomicJson(stateFile, state);
     let result;
-    try { result = await send({ message: `${record.rfq.title} · ${record.quote.quantity} 件 · USD ${record.quote.unitPriceUsd}/件 · 总计 USD ${record.quote.totalUsd}`, draftId }); }
+    try { result = await send({ message, draftId }); }
     catch { result = { status: "failed", detail: "通知发送失败；草稿已保存，请检查系统通知权限" }; }
     // 其他 RFQ 可同时发送；结束时重新读索引，保留它们已写入的记录。
     const latest = readJson(stateFile, { attempts: {} });
     state.attempts = latest.attempts;
-    state.attempts[draftId] = { ...result, at: new Date().toISOString() };
+    state.attempts[draftId] = { ...result, message, at: new Date().toISOString() };
     atomicJson(path.join(claims, `${draftId}.json`), state.attempts[draftId]);
     atomicJson(stateFile, state);
-    atomicJson(path.join(path.dirname(file), "notification-status.json"), state.attempts[draftId]);
+    atomicJson(path.join(path.dirname(file), "notification-status.json"), { ...state.attempts[draftId], kind: "opportunity", draftId });
     return result;
   } catch (error) {
     console.error(`[notification] ${clean(error.message)}`);
@@ -201,6 +202,8 @@ export async function notifyOpportunity(record, config, { file = settingsPath(),
 export async function testNotification({ file = settingsPath(), baseUrl, send = sendNativeNotification } = {}) {
   if (readJson(file, {}).notificationsEnabled !== true) return { status: "disabled", detail: "请先开启机会系统通知。" };
   const result = await send({ test: true, baseUrl });
-  atomicJson(path.join(path.dirname(file), "notification-status.json"), { ...result, at: new Date().toISOString() });
+  const event = { ...result, kind: "test", at: new Date().toISOString() };
+  atomicJson(path.join(path.dirname(file), "notification-test.json"), event);
+  atomicJson(path.join(path.dirname(file), "notification-status.json"), event);
   return result;
 }

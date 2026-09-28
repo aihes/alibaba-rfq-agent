@@ -2,9 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, execFile } from "node:child_process";
+import { readProgressEvents } from "../src/progress.js";
+import { setDraftArchived } from "../src/draft-archive.js";
+import { stageEvidenceFromRecord } from "../src/stage-evidence.js";
 
 const now = () => new Date().toISOString();
-const attention = /CAPTCHA|verification challenge|login is required|Cannot attach to the existing Chrome session|Browser connection or Alibaba requires human attention|Chrome Bridge or Alibaba requires human attention|needs_manual_review|Submit was clicked, but success could not be verified|内置浏览器|页面操作失败/i;
+const attention = /CAPTCHA|verification challenge|login is required|login could not be verified|Cannot attach to the existing Chrome session|Browser connection or Alibaba requires human attention|Chrome Bridge or Alibaba requires human attention|needs_manual_review|Submit was clicked, but success could not be verified|内置浏览器|页面操作失败/i;
+function attentionMessage(log) {
+  if (/CAPTCHA|verification challenge/i.test(log)) return "Alibaba 页面要求验证码或安全验证，请在内置浏览器手动完成后重试";
+  if (/login is required/i.test(log)) return "任务在 RFQ 页面遇到登录提示，已停止分析。页面可能尚未加载完成，也可能要求单独验证；请查看当前账号状态和该 RFQ 页面";
+  if (/login could not be verified/i.test(log)) return "任务在 RFQ 页面未看到稳定的登录标记，已停止分析。请查看当前账号状态和该 RFQ 页面";
+  if (/Cannot attach|Browser connection|Chrome Bridge|内置浏览器|页面操作失败/i.test(log)) return "内置浏览器连接或页面操作失败。请到「浏览器」查看状态后重试";
+  return "任务需要人工检查，请查看下方日志";
+}
 function read(file, fallback) { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return fallback; } }
 function write(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -25,7 +35,7 @@ function browserChecks(b) {
     { key: "login", ok: result?.status === "logged_in" && !b.inspectionError, label: "Alibaba 账号", state: loginState,
       detail: !b.opened ? "打开浏览器后自动检查登录状态" : b.loading ? "等待页面加载完成后自动检查" : b.inspectionError || result?.detail || (b.busy && !b.checking ? "任务完成后自动更新登录状态" : "正在读取当前页面的登录提示"),
       checkedAt: result?.checkedAt || null,
-      ...(b.opened && !b.loading && result?.status !== "logged_in" ? { action: result?.status === "unsupported_page" ? "open_rfq" : "open_browser", actionLabel: result?.status === "unsupported_page" ? "打开 RFQ 列表" : result?.status === "captcha" ? "去处理验证" : "打开浏览器登录" } : {}) }
+      ...(b.opened && !b.loading && result?.status !== "logged_in" ? { action: result?.status === "unsupported_page" ? "open_rfq" : "open_browser", actionLabel: result?.status === "unsupported_page" ? "打开 RFQ 列表" : result?.status === "captcha" ? "去处理验证" : result?.status === "unknown" ? "查看浏览器" : "打开浏览器登录" } : {}) }
   ];
 }
 
@@ -38,15 +48,27 @@ export class OperatorConsole {
     this.opsDir = path.join(workspace, "data/case-catalog/ops");
     this.settingsFile = path.join(this.opsDir, "settings.json");
     this.lastFile = path.join(this.opsDir, "last-run.json");
-    this.settings = { browserEnabled: false, quoteEnabled: false, alertsEnabled: true, notificationsEnabled: false };
+    // 浏览器控制是工作台的内置能力，不是一个由用户配置的总开关。
+    // 旧版本保存的 browserEnabled=false 在这里忽略；启动任务仍需用户
+    // 点击，浏览器适配器仍只接受有任务令牌的受限动作。
+    this.settings = { browserEnabled: true, quoteEnabled: false, alertsEnabled: true, notificationsEnabled: false };
     const saved = read(this.settingsFile, {});
-    for (const key of ["browserEnabled", "alertsEnabled", "notificationsEnabled"]) if (typeof saved[key] === "boolean") this.settings[key] = saved[key];
+    for (const key of ["alertsEnabled", "notificationsEnabled"])
+      if (typeof saved[key] === "boolean") this.settings[key] = saved[key];
     this.searchTerms = read(path.join(workspace, "config/default.json"), {}).searchTerms || [];
     this.current = null; this.process = null; this.probe = null; this.generation = 0; this.closed = false;
+    // 服务实测只保存在本次应用进程。配置指纹包含密钥但只存哈希；设置或
+    // 本机环境变量变化后，旧的成功结果不会继续冒充当前配置可用。
+    this.serviceChecks = {};
     this.children = new Set();
     this.last = read(this.lastFile, null);
     if (["running", "stopping", "indexing"].includes(this.last?.status)) {
       this.last = { ...this.last, status: "interrupted", finishedAt: now(), alert: "应用重启，原任务已中断；提交状态需要人工核对" };
+      write(this.lastFile, this.last);
+    } else if (this.last?.status === "attention" && ["登录、验证码或连接需要人工处理", "RFQ 页面提示未登录。请在内置浏览器检查账号，打开 RFQ 列表后再重试"].includes(this.last.alert)) {
+      // 旧版只保存了笼统文案。升级时从该次本地任务日志恢复精确原因，
+      // 不会重新运行扫描，也不读取浏览器身份数据。
+      this.last.alert = attentionMessage(this.tail(this.last));
       write(this.lastFile, this.last);
     }
   }
@@ -99,19 +121,66 @@ export class OperatorConsole {
     } catch { return ""; }
   }
   snapshot() {
-    return { settings: this.settings, searchTerms: this.searchTerms, run: this.current || this.last,
+    const last = read(path.join(this.opsDir, "notification-status.json"), null);
+    const lastTest = read(path.join(this.opsDir, "notification-test.json"), null);
+    const attempts = read(path.join(this.opsDir, "notification-state.json"), { attempts: {} }).attempts || {};
+    // 机会提醒从现有去重记录恢复：即使系统横幅被专注模式隐藏，重新打开
+    // 工作台仍能找到草稿。旧版本没有 message 的记录也保留 RFQ ID。
+    const events = Object.entries(attempts).filter(([draftId, entry]) => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(draftId) && entry?.at && entry.status !== "attempting")
+      .map(([draftId, entry]) => ({ id: `opportunity:${draftId}`, kind: "opportunity", draftId,
+        message: String(entry.message || draftId).slice(0, 160), status: entry.status, at: entry.at }));
+    const test = lastTest || (last?.kind === "test" ? last : null);
+    if (test?.at) events.push({ id: `test:${test.at}`, kind: "test", status: test.status, detail: test.detail, at: test.at });
+    events.sort((a, b) => b.at.localeCompare(a.at));
+    const run = this.current || this.last;
+    const progressFile = run ? path.join(this.opsDir, `${run.id}.progress.json`) : null;
+    const progress = progressFile ? read(progressFile, null) : null;
+    const history = progressFile ? readProgressEvents(progressFile) : { events: [], truncated: false };
+    return { settings: this.settings, searchTerms: this.searchTerms, run: run ? { ...run, progress,
+      progressEvents: history.events, progressTruncated: history.truncated } : null,
       log: this.tail(), serverTime: now(), envChecking: Boolean(this.probe || this.embeddedBrowser?.inspecting || this.browserImporting),
-      notifications: { supported: this.desktop || process.platform === "darwin", last: read(path.join(this.opsDir, "notification-status.json"), null) } };
+      notifications: { supported: this.desktop || process.platform === "darwin", last, events: events.slice(0, 20) } };
+  }
+  stageDetail(index) {
+    const run = this.current || this.last;
+    if (!run || !Number.isInteger(index) || index < 0 || index >= 120) throw new Error("阶段编号无效");
+    const file = path.join(this.opsDir, `${run.id}.progress.json`);
+    const events = readProgressEvents(file).events;
+    // 旧版没有 JSONL 流水时，只能显示最后保留的单条状态。
+    const event = events[index] || (index === 0 && !events.length ? read(file, null) : null);
+    if (!event) throw new Error("阶段记录不存在，请刷新任务状态");
+    if (event.input !== undefined || event.output !== undefined)
+      return { stage: event.stage, at: event.at, completedAt: event.completedAt || null,
+        source: "本次任务逐阶段记录", input: event.input ?? null, output: event.output ?? null,
+        note: event.output === undefined ? "本阶段仍在运行，或结束前未取得产出。" : null };
+    let summary = null;
+    if (run.kind === "once") {
+      try {
+        const log = fs.readFileSync(path.join(this.opsDir, `${run.id}.log`), "utf8");
+        if (log.length <= 2 * 1024 * 1024) summary = JSON.parse(log.slice(log.indexOf("{")));
+      } catch {}
+    }
+    const recordId = ["detail", "analysis", "pricing", "draft", "save"].includes(event.stage)
+      ? summary?.records?.[(event.itemIndex || 1) - 1]?.id : null;
+    let record = null;
+    if (typeof recordId === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(recordId)) {
+      const directory = path.join(this.workspace, "data/drafts");
+      try {
+        const resolved = fs.realpathSync(path.join(directory, `${recordId}.json`));
+        if (resolved.startsWith(`${fs.realpathSync(directory)}${path.sep}`)) record = JSON.parse(fs.readFileSync(resolved, "utf8"));
+      } catch {}
+    }
+    return { stage: event.stage, at: event.at, completedAt: null,
+      ...stageEvidenceFromRecord(event, summary, record) };
   }
   updateSettings(changes) {
     if (!changes || Array.isArray(changes) || !Object.keys(changes).length || Object.entries(changes).some(([key, value]) => !(key in this.settings) || typeof value !== "boolean")) throw new Error("开关参数无效");
-    if (changes.quoteEnabled && !(changes.browserEnabled ?? this.settings.browserEnabled)) throw new Error("请先开启浏览器操作");
-    if ("browserEnabled" in changes) { this.cache = null; this.generation++; }
+    if ("browserEnabled" in changes) throw new Error("浏览器能力默认可用；请使用停止任务控制当前运行");
+    const wasQuoteEnabled = this.settings.quoteEnabled;
     this.settings = { ...this.settings, ...changes };
-    if (changes.browserEnabled === false || changes.quoteEnabled === false) this.revokeBrowser();
-    if (!this.settings.browserEnabled) { this.settings.quoteEnabled = false; this.kill(this.probe, "SIGKILL"); }
+    if (changes.quoteEnabled === false && wasQuoteEnabled) this.revokeBrowser();
     write(this.settingsFile, this.settings);
-    if (this.current && ((!this.settings.browserEnabled && this.current.kind !== "refresh") || (!this.settings.quoteEnabled && this.current.kind.startsWith("quote_")))) this.stop();
+    if (this.current && !this.settings.quoteEnabled && this.current.kind.startsWith("quote_")) this.stop();
     return this.snapshot();
   }
   assertIdle() { if (this.closed) throw new Error("应用正在退出"); if (this.current || this.quotePreparing) throw new Error("已有任务正在运行，请先停止"); if (this.probe || this.embeddedBrowser?.inspecting || this.browserImporting) throw new Error("环境检测或登录导入正在进行，请稍后再试"); }
@@ -120,6 +189,19 @@ export class OperatorConsole {
     const browser = this.closed || this.current || this.quotePreparing || this.probe || this.browserImporting
       ? this.embeddedBrowser.info() : await this.embeddedBrowser.status(force);
     return { ...browser, checks: browserChecks(browser) };
+  }
+  serviceFingerprint(key, env = this.environment()) {
+    const fields = key === "model"
+      ? ["AGENT_PROVIDER", "MODEL_NAME", "MODEL_API_URL", "MODEL_API_KEY", "LOCAL_CLAUDE_EXECUTABLE", "LOCAL_CLAUDE_MODEL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]
+      : ["OCR_PROVIDER", "GLM_OCR_API_URL", "GLM_OCR_API_KEY"];
+    return crypto.createHash("sha256").update(JSON.stringify(fields.map(field => env[field] || ""))).digest("hex");
+  }
+  recordServiceCheck(key, ok, detail) {
+    this.serviceChecks[key] = { fingerprint: this.serviceFingerprint(key), ok, detail, checkedAt: now() };
+  }
+  serviceCheck(key, env) {
+    const check = this.serviceChecks[key];
+    return check?.fingerprint === this.serviceFingerprint(key, env) ? check : null;
   }
   async envCheck(force = false) {
     const embedded = Boolean(this.embeddedBrowser);
@@ -137,53 +219,66 @@ export class OperatorConsole {
     if (this.desktop) {
       const env = this.environment();
       const localClaude = env.AGENT_PROVIDER === "local-claude-sdk", modelReady = localClaude ? Boolean(env.LOCAL_CLAUDE_EXECUTABLE) : Boolean(env.MODEL_API_KEY);
-      checks.push({ key: "model", ok: modelReady, required: false, label: "需求分析模型",
+      const modelCheck = this.serviceCheck("model", env), ocrReady = env.OCR_PROVIDER !== "off" && Boolean(env.GLM_OCR_API_KEY);
+      const ocrCheck = this.serviceCheck("ocr", env);
+      checks.push({ key: "model", ok: modelReady && modelCheck?.ok === true, required: false, label: "需求分析模型",
+        state: !modelReady ? "待配置" : !modelCheck ? "已配置 · 待检测" : modelCheck.ok ? "实测可用" : "检测失败",
         detail: modelReady ? localClaude ? `本机 Claude · ${env.LOCAL_CLAUDE_MODEL || "继承用户模型"}` : `${env.MODEL_NAME || "已配置模型"} · ${env.RFQ_MODEL_CONFIG_SOURCE || "已保存配置"}`
           : localClaude ? "未找到本机 Claude；请安装或在设置中选择 GLM HTTP" : "未配置模型 API Key",
-        help: "在「设置」测试本机 Claude 或 GLM HTTP；此处只检查配置，不触发模型调用" });
-      checks.push({ key: "ocr", ok: env.OCR_PROVIDER === "off" || Boolean(env.GLM_OCR_API_KEY), required: false, label: "图片文字识别", detail: env.OCR_PROVIDER === "off" ? "图片识别已关闭" : env.GLM_OCR_API_KEY ? "GLM OCR · API Key 可用" : "GLM OCR · 尚未配置 API Key", help: "未调用 OCR 服务，不产生 API 用量；在设置页查看密钥来源" });
+        help: modelCheck ? `${modelCheck.detail} · 检测于 ${new Date(modelCheck.checkedAt).toLocaleString("zh-CN")}` : "点击「测试模型」发送固定文本，确认当前调用方式可用；会产生少量模型用量",
+        testable: modelReady });
+      checks.push({ key: "ocr", ok: ocrReady && ocrCheck?.ok === true, required: false, label: "图片文字识别",
+        state: env.OCR_PROVIDER === "off" ? "已关闭" : !ocrReady ? "待配置" : !ocrCheck ? "已配置 · 待检测" : ocrCheck.ok ? "实测可用" : "检测失败",
+        detail: env.OCR_PROVIDER === "off" ? "图片识别已关闭" : ocrReady ? "GLM OCR · API Key 已配置" : "GLM OCR · 尚未配置 API Key",
+        help: ocrCheck && ocrReady ? `${ocrCheck.detail} · 检测于 ${new Date(ocrCheck.checkedAt).toLocaleString("zh-CN")}` : "点击「测试 OCR」识别内置样张；会产生少量 OCR 用量",
+        testable: ocrReady });
       checks.push({ key: "port", ok: Boolean(env.QUOTE_PORT), required: false, label: "报价交货地点", detail: env.QUOTE_PORT || "尚未核实交货地点 / 港口", help: "缺失时可浏览或扫描，但报价须先人工核实并在设置页填写" });
     }
     const report = (status, reason) => { if (reason) checks.filter((x) => ["bridge", "login"].includes(x.key)).forEach((x) => { x.detail = reason; }); return { ok: checks.filter((x) => x.required !== false).every((x) => x.ok), checks, status, checkedAt: now() }; };
     if (this.closed) return report("skipped", "应用正在退出");
     if (embedded) {
-      // 桌面版读取自有窗口，无需启动需要 Agent 授权的 status worker。
-      // Web / CLI 仍走下方授权 Bridge 路径，不能借状态查询连接个人 Chrome。
+      // 桌面版只读自有窗口；Web / CLI 通过 Bridge 查询连接状态。
+      // 两者都不会仅因检查环境而启动扫描或报价任务。
       const browser = await this.browserStatus(force);
       checks.splice(2, 2, ...browser.checks);
       return { ...report("checked"), browser };
     }
-    if (!this.settings.browserEnabled) return report("skipped", "浏览器控制已关闭；开启后才检测连接和登录态");
     if (this.current || this.quotePreparing || this.probe || this.embeddedBrowser?.inspecting) return report("skipped", "任务或检测正在进行；完成后再检测");
     if (!force && this.cache && Date.now() - this.cache.at < 20000) return this.cache.value;
     const generation = this.generation;
     try {
       const result = await this.runJson("plugins/alibaba-rfq-midscene/scripts/cli.mjs", ["status"], 30000, (child) => { this.probe = child; });
-      if (generation !== this.generation || !this.settings.browserEnabled) return report("skipped", "授权已变化，本次检测已取消");
+      if (generation !== this.generation) return report("skipped", "应用状态已变化，本次检测已取消");
       checks[2].ok = result.connected === true; checks[2].detail = result.connected ? `已连接（${embedded ? "应用窗口" : "tab"} ${result.tabId}）` : embedded ? "请打开应用内的阿里巴巴浏览器" : "请在 Chrome 中开启 Midscene Bridge";
       checks[3].ok = result.connected === true && result.loggedIn === true;
       checks[3].detail = checks[3].ok ? "当前 RFQ 页面已检测到登录标记" : /verification challenge/i.test(result.attention) ? "检测到验证码或安全验证，请停止任务并手动处理" : /login is required/i.test(result.attention) ? "尚未登录或登录失效，请在内置浏览器手动登录" : result.attention || (embedded ? "请在应用内的阿里巴巴窗口手动登录" : "请人工在监听 Chrome 中登录 Alibaba");
       checks[2].help = "这是本次实际连接检测；任务会再次连接并检查页面，空闲时 CDP 会断开";
       checks[3].help = "进入浏览器页可单独执行只读登录检测，无需开启 Agent 控制";
     } catch {
-      return generation !== this.generation || !this.settings.browserEnabled
-        ? report("skipped", "授权已变化，本次检测已取消")
+      return generation !== this.generation
+        ? report("skipped", "应用状态已变化，本次检测已取消")
         : report("checked", embedded ? "检测失败或超时，请打开内置浏览器，检查网络与登录状态" : "检测失败或超时，请检查 Chrome、插件和登录状态");
     }
     finally { this.probe = null; }
     const value = report("checked"); this.cache = { at: Date.now(), value }; return value;
   }
   listQuotes() { return this.runJson("scripts/console-quote.mjs", ["list"]); }
+  archiveQuote(request) {
+    this.assertIdle();
+    if (!request || Object.keys(request).some((key) => !["id", "archived"].includes(key))) throw new Error("草稿整理参数无效");
+    return setDraftArchived(this.workspace, request.id, request.archived);
+  }
   reviewQuote(id) { if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(id || "")) throw new Error("草稿 ID 无效"); return this.runJson("scripts/console-quote.mjs", ["review", id]); }
   async startQuote(request) {
     this.assertIdle();
     if (!["fill", "submit"].includes(request?.kind) || request.approved !== true) throw new Error("请先核对该 RFQ 的报价字段");
-    if (!this.settings.browserEnabled || !this.settings.quoteEnabled) throw new Error("请先开启浏览器操作和逐单报价");
+    if (!this.settings.quoteEnabled) throw new Error("请先选择逐单浏览器报价模式");
     // 审阅是异步读取，必须先占用槽位；关闭权限后也要再次检查。
     this.quotePreparing = true;
     try {
       const review = await this.reviewQuote(request.draftId);
-      if (this.closed || !this.settings.browserEnabled || !this.settings.quoteEnabled) throw new Error("浏览器报价授权已关闭");
+      if (review.archivedAt) throw new Error("草稿已移出当前列表；先恢复后再报价");
+      if (this.closed || !this.settings.quoteEnabled) throw new Error("逐单浏览器报价模式已关闭");
       if (request.reviewHash !== review.reviewHash || request.confirmation !== review.rfq.id) throw new Error("草稿已变化或 RFQ ID 确认不匹配，请重新核对");
       if (!review[request.kind === "fill" ? "fillEligible" : "submitEligible"]) throw new Error("当前草稿不允许执行该报价动作");
       const extra = request.kind === "submit" ? { AUTO_CONTACT_MODE: "submit", ALLOW_LIVE_SUBMIT: "true", AUTO_CONTACT_ACK: "I_UNDERSTAND_AUTO_QUOTES_ARE_SENT", AUTO_CONTACT_CATEGORIES: review.quote.categoryId, QUOTE_PORT: review.draft.port } : {};
@@ -194,7 +289,6 @@ export class OperatorConsole {
     this.assertIdle();
     const { kind, term = this.searchTerms[0], limit = 1 } = request || {};
     if (!["refresh", "scan", "once", "watch"].includes(kind) || ![...this.searchTerms, "__all__"].includes(term) || !Number.isInteger(limit) || limit < 1 || limit > 3) throw new Error("任务参数无效");
-    if (kind !== "refresh" && !this.settings.browserEnabled) throw new Error("请先开启浏览器操作");
     if (this.desktop && ["once", "watch"].includes(kind)) {
       const env = this.environment();
       if (env.AGENT_PROVIDER === "local-claude-sdk" && !env.LOCAL_CLAUDE_EXECUTABLE) throw new Error("未找到本机 Claude，请安装后重试或在设置中选择 GLM HTTP");
@@ -208,9 +302,10 @@ export class OperatorConsole {
   launch(fields, script, args, extra) {
     const run = { id: crypto.randomUUID().replaceAll("-", "").slice(0, 12), ...fields, status: "running", startedAt: now(), finishedAt: null, exitCode: null, alert: null };
     fs.mkdirSync(this.opsDir, { recursive: true });
+    const progressFile = path.join(this.opsDir, `${run.id}.progress.json`);
     const fd = fs.openSync(path.join(this.opsDir, `${run.id}.log`), "w");
     let child;
-    try { child = this.spawn(script, args, { env: this.env(extra), stdio: ["ignore", fd, fd] }); } finally { fs.closeSync(fd); }
+    try { child = this.spawn(script, args, { env: this.env({ ...extra, RFQ_PROGRESS_FILE: progressFile }), stdio: ["ignore", fd, fd] }); } finally { fs.closeSync(fd); }
     this.current = run; this.process = child; write(this.lastFile, run);
     let finishing = false;
     const done = async (code) => {
@@ -228,7 +323,7 @@ export class OperatorConsole {
       if (stopped && run.kind === "quote_submit") run.alert = "提交过程被中断，请核对页面和记录，不要直接重试";
       if (!stopped && code === 0 && run.kind.startsWith("quote_") && !new RegExp(`"status"\\s*:\\s*"${run.kind === "quote_fill" ? "filled_not_submitted" : "submitted"}"`).test(log)) { run.status = "attention"; run.alert = "报价动作没有可验证的完成状态，请人工核对"; }
       if (run.status === "failed") run.alert ||= "任务运行失败，请查看日志";
-      if (run.status === "attention") run.alert ||= "登录、验证码或连接需要人工处理";
+      if (run.status === "attention") run.alert ||= attentionMessage(log);
       this.current = null; this.process = null; this.last = run; write(this.lastFile, run);
     };
     child.once("error", () => done(1)); child.once("close", (code) => { if (this.process === child) done(code ?? 1); });
@@ -245,7 +340,11 @@ export class OperatorConsole {
   async testNotification() {
     if (!this.settings.notificationsEnabled) throw new Error("请先开启机会系统通知");
     if (this.notify) {
-      const result = await this.notify({ test: true }); write(path.join(this.opsDir, "notification-status.json"), result); return result;
+      const result = await this.notify({ test: true });
+      const event = { ...result, kind: "test", at: now() };
+      write(path.join(this.opsDir, "notification-test.json"), event);
+      write(path.join(this.opsDir, "notification-status.json"), event);
+      return result;
     }
     return this.runJson("scripts/notify-console.mjs", ["test"], 25000);
   }

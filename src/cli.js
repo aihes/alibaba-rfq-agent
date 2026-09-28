@@ -6,6 +6,7 @@ import { probeLocalVision } from "./claude.js";
 import { loadConfig, projectDir } from "./config.js";
 import { fillQuoteForm, submissionToken } from "./form.js";
 import { runCycle } from "./pipeline.js";
+import { reportProgress } from "./progress.js";
 import { sleep } from "./utils.js";
 
 function argValue(name) {
@@ -37,13 +38,14 @@ async function main() {
         console.log(JSON.stringify({ started, ...(await runCycle(config)) }, null, 2));
       } catch (error) {
         console.error(JSON.stringify({ started, error: error.message }));
-        const requiresHuman = /CAPTCHA|verification challenge|login is required|Cannot attach to the existing Chrome session through Chrome Bridge|内置浏览器|页面操作失败/i.test(error.message);
+        const requiresHuman = /CAPTCHA|verification challenge|login is required|login could not be verified|Cannot attach to the existing Chrome session through Chrome Bridge|内置浏览器|页面操作失败/i.test(error.message);
         if (requiresHuman) {
           console.error(JSON.stringify({ stopped: true, reason: "Browser connection or Alibaba requires human attention" }));
           process.exitCode = 1;
           return;
         }
       }
+      reportProgress("waiting", `等待下一轮扫描（${config.pollIntervalSeconds} 秒）`);
       await sleep(config.pollIntervalSeconds * 1000);
     }
   }

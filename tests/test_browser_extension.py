@@ -123,7 +123,7 @@ class ExtensionTest(unittest.TestCase):
                     self.assertEqual(status, 200)
                     self.assertEqual(body, extension.archive_bytes())
                     self.assertIn("extension.zip", disposition)
-                    self.assertFalse(server.console.snapshot()["settings"]["browserEnabled"])
+                    self.assertTrue(server.console.snapshot()["settings"]["browserEnabled"])
                     self.assertFalse(server.console.snapshot()["settings"]["quoteEnabled"])
             finally:
                 server.shutdown()

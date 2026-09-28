@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertAlibabaReady } from "../src/browser.js";
+import { ALIBABA_LOGIN_EVIDENCE_EXPRESSION, alibabaLoginStatus } from "../src/browser.js";
 import { importAlibabaCookies } from "./browser-import.js";
 
 export const RFQ_HOME = "https://sourcing.alibaba.com/rfq_search_list.htm";
@@ -16,7 +16,6 @@ const rfqAllowed = (value) => alibabaNavigationAllowed(value) && ["sourcing.alib
 const toolbarFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "browser-toolbar.html");
 const BAR_HEIGHT = 76;
 const sensitiveQuery = /(?:^|_)(?:token|auth|code|session|key|password|secret|jwt|ticket)(?:$|_)/i;
-
 // 登录跳转中的 ticket/code 不能显示在工具栏或进入剪贴板。RFQ 链接
 // 保留商品、搜索等普通查询参数，以便用户完整复制给同事核对。
 export function shareableBrowserUrl(value) {
@@ -34,9 +33,9 @@ export function shareableBrowserUrl(value) {
  * 没有 remote-debugging-port：CDP 只附着这个 webContents，不能控制工作台。
  */
 export class EmbeddedBrowser {
-  constructor({ BrowserWindow, WebContentsView, ipcMain, clipboard, authorize, navigationAllowed = alibabaNavigationAllowed, automationAllowed = rfqAllowed,
+  constructor({ BrowserWindow, WebContentsView, ipcMain, clipboard, authorize, sessionPersistence = () => null, beforeNavigate = async () => {}, navigationAllowed = alibabaNavigationAllowed, automationAllowed = rfqAllowed,
     shareableUrl = shareableBrowserUrl, home = RFQ_HOME }) {
-    Object.assign(this, { BrowserWindow, WebContentsView, ipcMain, clipboard, authorize, navigationAllowed, automationAllowed, shareableUrl, home });
+    Object.assign(this, { BrowserWindow, WebContentsView, ipcMain, clipboard, authorize, sessionPersistence, beforeNavigate, navigationAllowed, automationAllowed, shareableUrl, home });
     this.window = null; this.pageView = null; this.lease = null; this.closed = false; this.error = null; this.queue = Promise.resolve(); this.generation = 0;
     this.inspection = null; this.inspecting = false; this.inspectionAttempt = null; this.inspectionError = null;
   }
@@ -67,6 +66,7 @@ export class EmbeddedBrowser {
     return { provider: "electron-cdp", opened: Boolean(wc), visible: Boolean(wc && this.window.isVisible()), origin, page, pageKind,
       loading: Boolean(wc?.isLoading?.()), title: wc?.getTitle()?.slice(0, 200) || "", partition: RFQ_PARTITION,
       chromium: process.versions.chrome || null, cdpAttached: Boolean(wc?.debugger.isAttached()),
+      sessionPersistence: this.sessionPersistence(),
       browserEnabled: this.authorize().browser === true, busy: this.authorize().busy === true || this.inspecting, checking: this.inspecting,
       canGoBack: Boolean(wc?.navigationHistory?.canGoBack()), canGoForward: Boolean(wc?.navigationHistory?.canGoForward()),
       inspection, inspectionError: this.inspectionAttempt?.url === wc?.getURL() ? this.inspectionError : null, error: this.error };
@@ -162,6 +162,9 @@ export class EmbeddedBrowser {
     const win = this.ensure(); win.show(); win.focus();
     if (url || !this.pageContents().getURL()) {
       if (this.authorize().busy || this.inspecting) throw new Error("请先停止任务或等待检测完成，再切换内置浏览器页面");
+      // 首次启动时若持久分区的 Cookie 服务超时，可见浏览器创建后再试
+      // 一次会话恢复；必须发生在首次 Alibaba 导航之前。
+      await this.beforeNavigate();
       this.invalidate(); await this.navigate(url || this.home); this.pageContents().focus?.();
     }
     return this.info();
@@ -202,18 +205,17 @@ export class EmbeddedBrowser {
     const generation = this.generation;
     try {
       wc.debugger.attach("1.3");
-      const read = await wc.debugger.sendCommand("Runtime.evaluate", { expression: "document.body?.innerText?.slice(0, 30000) || ''", returnByValue: true, timeout: 5000 });
+      const read = await wc.debugger.sendCommand("Runtime.evaluate", { expression: ALIBABA_LOGIN_EVIDENCE_EXPRESSION, returnByValue: true, timeout: 5000 });
       if (read.exceptionDetails) throw new Error("页面文字读取失败");
       if (wc.getURL() !== url || generation !== this.generation) throw new Error("页面或授权已变化，请重新检测");
-      const body = String(read.result?.value || "");
-      let status = "unknown", detail = "页面未显示明确的登录标记，请确认账号后再运行 Agent";
-      try {
-        await assertAlibabaReady({ url: () => url, locator: () => ({ innerText: async () => body }) });
-        if (/退出|My Alibaba|立即报价|RFQ 详情|Order\b|Favorites\b|form-submit/i.test(body)) { status = "logged_in"; detail = "当前 RFQ 页面检测到登录标记；运行任务时仍会再次检查"; }
-      } catch (error) {
-        if (/verification challenge/i.test(error.message)) { status = "captcha"; detail = "检测到验证码或安全验证，请在浏览器手动处理"; }
-        else { status = "login_required"; detail = "当前账号未登录或登录失效，请在浏览器手动登录"; }
-      }
+      const evidence = read.result?.value;
+      const status = alibabaLoginStatus(evidence, url);
+      const detail = {
+        logged_in: "当前页面账号导航显示已登录；运行任务时仍会再次检查",
+        login_required: "当前页面显示登录入口或未登录提示，请在浏览器手动登录",
+        captcha: "检测到验证码或安全验证，请在浏览器手动处理",
+        unknown: "页面未显示明确的登录标记，请确认账号后再运行 Agent"
+      }[status];
       this.inspection = { url, result: { status, detail, checkedAt: new Date().toISOString() } };
     } finally { this.inspecting = false; if (!wc.isDestroyed() && wc.debugger.isAttached()) wc.debugger.detach(); }
     return this.info();
@@ -243,6 +245,15 @@ export class EmbeddedBrowser {
       const result = await importAlibabaCookies(wc.session, prepared);
       return result;
     } finally { this.inspecting = false; }
+  }
+  async flushSession() {
+    const wc = this.pageContents();
+    if (!wc || wc.isDestroyed()) return;
+    // Chromium 会延迟写入持久 Cookie 和 DOM Storage。正常退出时主动
+    // 落盘，避免用户刚登录就退出时丢失尚未写入的数据。网站签发的会话
+    // Cookie 或服务端主动失效仍可能要求再次登录，不能在这里改写有效期。
+    await wc.session.cookies.flushStore();
+    await wc.session.flushStorageData();
   }
   invalidate(stop = true) {
     this.generation++;

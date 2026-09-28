@@ -1,7 +1,8 @@
-const state = { catalog: null, source: 'priced', category: 'all', query: '', priced: false, selected: null, tab: 'summary', view: 'cases', ops: null, opsFlash: '', envLoading: false, notificationTesting: false, notificationFlash: '', lastFinishedRun: null, quotes: null, quoteSelected: null, quoteDetail: null, quoteReview: null };
+const state = { catalog: null, source: 'priced', category: 'all', query: '', priced: false, selected: null, tab: 'summary', view: 'cases', ops: null, opsFlash: '', envLoading: false, notificationTesting: false, notificationFlash: '', notificationSeen: null, notificationToastDraft: null, lastFinishedRun: null, quotes: null, quoteSelected: null, quoteDetail: null, quoteReview: null, quoteShowArchived: false, quoteArchiveConfirm: false, quoteArchiveError: '', quoteQuery: '', quoteStatusFilter: 'all', quoteCategoryFilter: 'all', quoteDateFrom: '', quoteDateTo: '', runHistorySignature: '', stageOpen: new Set(), stageDetailCache: new Map() };
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const fmt = (value, maximumFractionDigits = 3) => value == null ? '—' : new Intl.NumberFormat('en-US', { maximumFractionDigits }).format(value);
+const localTime = (value) => { const date = new Date(value); return value && Number.isFinite(date.getTime()) ? date.toLocaleString('zh-CN', { hour12: false }) : '时间未记录'; };
 const label = (item) => item.sourceType === 'agent_run' ? 'AGENT / RFQ' : item.quotes.length ? 'MANUAL / PI' : 'MANUAL / FILE';
 const statusClass = (item) => item.status === 'customer_quote_document' || item.status === 'conditional_quote' ? 'orange' : item.status === 'working_material_only' ? 'gray' : '';
 const safeAlibabaUrl = (value) => { try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && !url.port && ['sourcing.alibaba.com', 'rfqposting.alibaba.com'].includes(url.hostname) ? url.href : null; } catch { return null; } };
@@ -19,8 +20,7 @@ function renderBrowserSetup() {
   $('.settings-index').hidden = desktopInfo?.desktop !== true;
   if (!desktopInfo?.desktop) $('#settings-runtime').innerHTML = '<div><dt>运行方式</dt><dd>本机 Web / CLI 服务</dd></div>';
   if (embedded) {
-    $('#browser-isolation').textContent = '打开应用内的浏览器并登录 Alibaba，状态会自动更新。准备扫描时再开启下方 Agent 操作权限。';
-    $('#browser-control-help').textContent = '开启后才允许扫描和报价操作；关闭会停止浏览器任务。手动浏览和登录状态检查始终可用。';
+    $('#browser-isolation').textContent = '打开应用内的浏览器并登录 Alibaba，状态会自动更新。登录后可直接在报价 Agent 启动扫描。';
     $('#env-heading').textContent = '运行准备';
     $('#env-recheck').textContent = '刷新状态';
     $('#env-browser-action').hidden = false;
@@ -83,7 +83,7 @@ async function loadDesktop() {
     $('#desktop-setup').hidden = false;
     $('#desktop-data-path').textContent = desktopInfo.workspace;
     $('#runtime-hint').textContent = '关闭窗口继续运行 · 菜单退出停止';
-    $('#notification-platform').textContent = '桌面应用原生通知';
+    $('#notification-platform').textContent = '系统通知 + 应用内提醒';
     renderModelSettings(desktopInfo.settings);
     $('#model-config-source').addEventListener('change', syncModelSource);
     $('#model-environment-refresh').addEventListener('click', async () => {
@@ -120,7 +120,13 @@ async function loadDesktop() {
       $('#model-test').disabled = true; $('#model-settings-status').textContent = '正在测试当前调用方式…';
       try { $('#model-settings-status').textContent = (await opsRequest('/api/desktop/model/test', {})).detail; }
       catch (error) { $('#model-settings-status').textContent = error.message; }
-      finally { $('#model-test').disabled = false; }
+      finally { $('#model-test').disabled = false; await loadEnv(); }
+    });
+    $('#ocr-test').addEventListener('click', async () => {
+      $('#ocr-test').disabled = true; $('#ocr-settings-status').textContent = '正在识别内置样张…';
+      try { $('#ocr-settings-status').textContent = (await opsRequest('/api/desktop/ocr/test', {})).detail; }
+      catch (error) { $('#ocr-settings-status').textContent = error.message; }
+      finally { $('#ocr-test').disabled = false; await loadEnv(); }
     });
     $('#model-clear').addEventListener('click', async () => {
       try { renderModelSettings(await opsRequest('/api/desktop/settings', { clearSecrets: ['modelApiKey', 'ocrApiKey'] })); }
@@ -145,8 +151,9 @@ function renderBrowser() {
   $('#browser-window-badge').textContent = !b.opened ? '未打开' : b.loading ? '加载中' : b.visible ? '窗口已显示' : '窗口在后台';
   $('#browser-window-badge').className = `pill ${b.opened && !b.error ? '' : 'gray'}`;
   $('#browser-page-title').textContent = b.title || (b.opened ? 'Alibaba 浏览器' : '尚未打开浏览器');
-  const authorized = state.ops?.settings.browserEnabled ?? b.browserEnabled;
-  const facts = [['当前页面', b.page || '打开浏览器后显示'], ['Alibaba 账号', b.checks?.find((x) => x.key === 'login')?.state || '正在确认'], ['独立会话', 'Alibaba 专用 · 登录保存在本机'], ['Agent 操作权限', authorized ? '已开启 · 启动任务后运行' : '已关闭 · 手动浏览可用'], ['任务占用', busy ? '占用中 · 暂停导航' : '空闲'], ['浏览器内核', `Chromium ${b.chromium || desktopInfo?.runtime?.chromium || '—'}`]];
+  const persistence = b.sessionPersistence;
+  const sessionText = persistence?.error || (persistence?.enabled ? '本机加密保存 · 重启和升级后自动恢复' : 'Alibaba 专用会话');
+  const facts = [['当前页面', b.page || '打开浏览器后显示'], ['Alibaba 账号', b.checks?.find((x) => x.key === 'login')?.state || '正在确认'], ['登录保存', sessionText], ['任务占用', busy ? '占用中 · 暂停导航' : '空闲'], ['浏览器内核', `Chromium ${b.chromium || desktopInfo?.runtime?.chromium || '—'}`]];
   $('#browser-facts').innerHTML = facts.map(([key, value]) => `<div><dt>${esc(key)}</dt><dd>${esc(value)}</dd></div>`).join('');
   $('#browser-last-error').hidden = !b.error;
   $('#browser-last-error').textContent = b.error || '';
@@ -364,6 +371,7 @@ function renderDetail() {
 
 const runNames = { refresh: '重新整理数据集', scan: '扫描 RFQ', once: '运行一轮分析', watch: '持续监控', quote_fill: '浏览器回填报价', quote_submit: '向买家提交报价' };
 const statusNames = { running: '运行中', stopping: '正在停止', indexing: '正在更新数据集', completed: '已完成', stopped: '已停止', failed: '运行失败', attention: '需要人工处理', interrupted: '服务重启后状态未确认' };
+const stageNames = { connect: '连接浏览器', search: '搜索 RFQ', filter: '筛选新需求', detail: '读取 RFQ 详情', analysis: '模型分析需求', pricing: '核对价格规则', draft: '生成报价草稿', save: '保存结果', waiting: '等待下一轮', complete: '本轮完成', attention: '任务中断', stopped: '任务已停止' };
 const termLabel = (term) => term === '__all__' ? '全部品类' : term;
 // 保留历史 data-mode="auto" 作为内部键，界面准确表达它只开放逐单操作。
 // 扫描/监控的服务端环境始终禁用自动联系，切换模式不会发送未来的草稿。
@@ -427,7 +435,9 @@ function renderEnv() {
   const row = (check) => {
     const skipped = state.env.status === 'skipped' && ['bridge', 'login'].includes(check.key);
     const status = check.state || (check.ok ? '就绪' : skipped ? '未检测' : check.required === false ? '待配置' : '需要处理');
-    return `<div class="env-row ${check.ok ? 'ok' : skipped || check.state === '请先打开浏览器' || check.state === '页面加载中' ? 'skipped' : 'bad'}"><span class="env-dot" aria-hidden="true"></span><div><div class="env-row-heading"><strong>${esc(check.label)}</strong><span class="env-state">${esc(status)}</span></div><small>${esc(check.detail)}</small>${check.help ? `<p>${esc(check.help)}</p>` : ''}${['model', 'ocr', 'port'].includes(check.key) && !check.ok ? '<button class="text-button" type="button" data-view="settings">去设置 ↗</button>' : ''}</div></div>`;
+    const probe = check.testable ? `<button class="text-button" type="button" data-service-test="${check.key}">测试${check.key === 'model' ? '模型' : ' OCR'} ↗</button>` : '';
+    const settings = ['model', 'ocr', 'port'].includes(check.key) && !check.ok && !check.testable ? '<button class="text-button" type="button" data-view="settings">去设置 ↗</button>' : '';
+    return `<div class="env-row ${check.ok ? 'ok' : skipped || check.state === '请先打开浏览器' || check.state === '页面加载中' || check.state === '已配置 · 待检测' || check.state === '已关闭' ? 'skipped' : 'bad'}"><span class="env-dot" aria-hidden="true"></span><div><div class="env-row-heading"><strong>${esc(check.label)}</strong><span class="env-state">${esc(status)}</span></div><small>${esc(check.detail)}</small>${check.help ? `<p>${esc(check.help)}</p>` : ''}${probe}${settings}</div></div>`;
   };
   const detailsOpen = $('#env-config-checks details')?.open;
   const primary = checks.filter((x) => ['bridge', 'login'].includes(x.key));
@@ -505,12 +515,60 @@ async function opsRequest(path, payload) {
   return value;
 }
 
+function showNotificationToast(title, body, draftId = null) {
+  state.notificationToastDraft = draftId;
+  $('#notification-toast-title').textContent = title;
+  $('#notification-toast-body').textContent = body;
+  $('#notification-toast-open').hidden = !draftId;
+  $('#notification-toast').hidden = false;
+}
+
+async function openNotificationDraft(draftId) {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(draftId || '')) return;
+  setView('console');
+  await loadQuotes();
+  if (!state.quotes?.drafts.some((draft) => draft.id === draftId)) {
+    state.notificationFlash = `草稿 ${draftId} 尚未出现在列表中，请等待本轮数据整理完成。`;
+    renderOps();
+    return;
+  }
+  state.quoteSelected = draftId;
+  renderQuoteList();
+  await loadQuoteDetail();
+  $('#quote-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('#notification-toast').hidden = true;
+}
+
+function renderNotificationHistory(events) {
+  $('#notification-history-list').innerHTML = events.length ? events.slice(0, 5).map((event) => {
+    const opportunity = event.kind === 'opportunity';
+    const title = opportunity ? '可报价机会' : '测试通知';
+    const detail = opportunity ? event.message : '应用内测试提醒已送达';
+    const time = Number.isFinite(Date.parse(event.at)) ? new Date(event.at).toLocaleString('zh-CN') : '';
+    return `<button type="button" class="notification-history-item" ${opportunity ? `data-notification-draft="${esc(event.draftId)}"` : 'disabled'}><strong>${title} · ${esc(time)}</strong><small>${esc(detail)}</small></button>`;
+  }).join('') : '<small>暂无提醒</small>';
+}
+
+function handleNotifications(notifications) {
+  const events = Array.isArray(notifications?.events) ? notifications.events : [];
+  renderNotificationHistory(events);
+  const ids = new Set(events.map((event) => event.id));
+  // 首次打开时只展示历史列表；此后出现的新事件才弹出，避免重启应用
+  // 时把旧提醒再次误当成新机会。测试按钮每次都有新的时间 ID。
+  if (state.notificationSeen) {
+    const fresh = events.filter((event) => !state.notificationSeen.has(event.id));
+    const latest = fresh[0];
+    if (latest?.kind === 'opportunity') showNotificationToast('发现可报价机会', latest.message, latest.draftId);
+    else if (latest?.kind === 'test') showNotificationToast('应用内测试提醒',
+      `提醒已在 RFQ 助手中显示。系统通知：${latest.detail || latest.status || '已请求'}。`);
+  }
+  state.notificationSeen = ids;
+}
+
 function renderOps() {
   const data = state.ops;
   if (!data) return;
   const run = data.run;
-  $('#browser-enabled').checked = data.settings.browserEnabled;
-  $('#browser-page-enabled').checked = data.settings.browserEnabled;
   $('#alerts-enabled').checked = data.settings.alertsEnabled;
   $('#notifications-enabled').checked = data.settings.notificationsEnabled;
   $('#notifications-enabled').disabled = data.notifications?.supported === false;
@@ -530,26 +588,119 @@ function renderOps() {
   const envBusy = state.envLoading || data.envChecking;
   $('#env-recheck').disabled = !!active || !!envBusy;
   document.querySelectorAll('[data-action]').forEach((button) => {
-    button.disabled = !!active || !!envBusy || (button.dataset.action !== 'refresh' && !data.settings.browserEnabled);
+    const modelMissing = desktopInfo?.desktop && ['once', 'watch'].includes(button.dataset.action) && desktopInfo.settings?.modelReady === false;
+    const reason = active ? '已有任务正在运行；请先停止当前任务或等待完成。'
+      : envBusy ? '浏览器或环境正在检测；请等待检测完成。'
+      : modelMissing ? '需求分析模型未配置；到「设置」配置 Claude 或 GLM HTTP，再运行分析。' : '';
+    button.disabled = Boolean(reason);
+    // disabled 按钮本身收不到 hover/focus；提示放在可聚焦的外层。
+    const wrap = button.closest('.ops-action-wrap');
+    if (wrap) { wrap.dataset.reason = reason; wrap.tabIndex = reason ? 0 : -1; wrap.setAttribute('aria-label', reason ? `${button.textContent}：${reason}` : button.textContent); }
   });
+  const disabledScan = document.querySelector('.ops-action-wrap [data-action="scan"]')?.disabled;
+  $('#scan-action-help').textContent = disabledScan ? document.querySelector('.ops-action-wrap [data-action="scan"]').closest('.ops-action-wrap').dataset.reason : '启动前确认应用浏览器中的 Alibaba 登录状态。';
   $('#stop-run').disabled = !active || run.status !== 'running';
   $('#run-dot').className = `status-dot ${run?.status || 'idle'}`;
-  $('#run-status').textContent = run ? `${runNames[run.kind] || run.kind} · ${statusNames[run.status] || run.status}` : '待命';
+  $('#run-status').textContent = run ? `${active ? '' : '上次'}${runNames[run.kind] || run.kind} · ${statusNames[run.status] || run.status}` : '待命';
   $('#run-time').textContent = run?.startedAt ? new Date(run.startedAt).toLocaleString('zh-CN') : '—';
   $('#run-id').textContent = run ? `RUN ${run.id}` : '尚无运行记录';
+  const progress = run?.progress;
+  const stage = progress?.stage || (active ? 'connect' : null);
+  const stageLabel = stageNames[stage] || '等待启动任务';
+  $('#run-progress-stage').textContent = !run ? '等待启动任务' : run.status === 'indexing' ? '正在更新 CASE 列表'
+    : ['attention', 'failed', 'interrupted'].includes(run.status) && stage ? `上次停在：${stageLabel}`
+      : ['attention', 'failed', 'interrupted'].includes(run.status) ? '上次任务未完成' : stageLabel;
+  const category = progress?.categoryIndex && progress?.categoryTotal ? `品类 ${progress.categoryIndex}/${progress.categoryTotal}` : '';
+  const item = progress?.itemIndex && progress?.itemTotal ? `需求 ${progress.itemIndex}/${progress.itemTotal}` : '';
+  const scanHelp = $('#scan-action-help');
+  if (active && ['scan', 'once', 'watch'].includes(run.kind)) {
+    scanHelp.textContent = [progress?.message || `正在${stageLabel}…`, category, item].filter(Boolean).join(' · ');
+    scanHelp.classList.add('is-running');
+  } else scanHelp.classList.remove('is-running');
+  $('#run-progress-detail').textContent = [progress?.message || (run ? active ? '任务已启动，正在等待第一条进度…' : run.alert || '本次任务没有阶段记录。' : '点击扫描或分析后，这里会显示当前步骤和处理数量。'), category, item].filter(Boolean).join(' · ');
+  $('#run-progress-time').textContent = progress?.at ? `更新于 ${new Date(progress.at).toLocaleTimeString('zh-CN')}` : '—';
+  const stages = run?.kind === 'scan' ? ['connect', 'search', 'save'] : ['once', 'watch'].includes(run?.kind) ? ['connect', 'search', 'filter', 'detail', 'analysis', 'pricing', 'draft', 'save'] : [];
+  const index = stage === 'complete' ? stages.length : stages.indexOf(stage);
+  $('#run-progress-steps').innerHTML = stages.map((key, position) => `<li class="${index >= 0 && position < index ? 'done' : key === stage ? 'active' : ''}">${stageNames[key]}</li>`).join('');
+  const recorded = Array.isArray(run?.progressEvents) ? run.progressEvents : [];
+  const history = recorded.length ? recorded.map((event, index) => ({ ...event, _index: index })) : progress ? [{ ...progress, _index: 0 }] : [];
+  if (run?.finishedAt && ['attention', 'failed', 'interrupted', 'stopped'].includes(run.status) && recorded.length) {
+    history.push({ stage: run.status === 'stopped' ? 'stopped' : 'attention', message: run.alert || '任务已停止', at: run.finishedAt, _index: null });
+  }
+  $('#run-history-count').textContent = recorded.length ? `${history.length} 条阶段记录${run?.progressTruncated ? ' · 仅显示最近记录' : ''} · 最新在上`
+    : progress ? '旧版任务仅保留最后一步' : '启动任务后逐步记录';
+  // 轮询不重复替换同一段历史，避免每 2 秒让辅助技术重读全部阶段。
+  const signature = JSON.stringify([run?.id, history.map((event) => [event.at, event.stage, event.message, event.completedAt]), run?.status]);
+  if (signature !== state.runHistorySignature) {
+    state.runHistorySignature = signature;
+    $('#run-history').innerHTML = history.length ? [...history].reverse().map((event) => {
+      const count = [event.categoryIndex && event.categoryTotal ? `品类 ${event.categoryIndex}/${event.categoryTotal}` : '',
+        event.itemIndex && event.itemTotal ? `需求 ${event.itemIndex}/${event.itemTotal}` : ''].filter(Boolean).join(' · ');
+      if (event._index === null) return `<li class="stage-terminal"><time datetime="${esc(event.at)}">${esc(localTime(event.at))}</time><div><strong>${esc(stageNames[event.stage] || event.stage)}</strong><p>${esc(event.message)}</p></div></li>`;
+      const key = `${run.id}:${event._index}`;
+      if (state.stageDetailCache.has(key) && (state.stageDetailCache.get(key).completedAt || null) !== (event.completedAt || null)) state.stageDetailCache.delete(key);
+      return `<li><details class="stage-entry" data-stage-index="${event._index}" ${state.stageOpen.has(key) ? 'open' : ''}>
+        <summary><time datetime="${esc(event.at)}">${esc(localTime(event.at))}</time><span><strong>${esc(stageNames[event.stage] || event.stage)}</strong><small>${event.completedAt ? '已完成 · ' : ''}点击查看输入与输出</small><p>${esc([event.message, count].filter(Boolean).join(' · '))}</p></span></summary>
+        <div class="stage-evidence">${state.stageDetailCache.has(key) ? renderStageEvidence(state.stageDetailCache.get(key)) : '正在读取阶段内容…'}</div>
+      </details></li>`;
+    }).join('') : `<li class="empty">${run ? '这次运行没有阶段流水；旧版本的任务无法补录。' : '暂无阶段记录。'}</li>`;
+    $('#run-history').querySelectorAll('[data-stage-index]').forEach((entry) => entry.addEventListener('toggle', async () => {
+      const key = `${run.id}:${entry.dataset.stageIndex}`;
+      if (!entry.open) { state.stageOpen.delete(key); return; }
+      state.stageOpen.add(key);
+      if (state.stageDetailCache.has(key)) return;
+      try {
+        const response = await fetch(`/api/ops/stage?index=${entry.dataset.stageIndex}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        state.stageDetailCache.set(key, data);
+        if (entry.isConnected) entry.querySelector('.stage-evidence').innerHTML = renderStageEvidence(data);
+      } catch (error) { if (entry.isConnected) entry.querySelector('.stage-evidence').textContent = `无法读取：${error.message}`; }
+    }));
+  }
   $('#run-facts').innerHTML = run ? (run.kind.startsWith('quote_') ? `<div><span>RFQ</span><strong>${esc(run.rfqId || '—')}</strong></div><div><span>草稿</span><strong>${esc(run.draftId || '—')}</strong></div><div><span>退出码</span><strong>${esc(run.exitCode ?? '—')}</strong></div>` : `<div><span>监控品类</span><strong>${esc(termLabel(run.term) || '—')}</strong></div><div><span>新 RFQ 上限</span><strong>${esc(run.limit ?? '—')}</strong></div><div><span>退出码</span><strong>${esc(run.exitCode ?? '—')}</strong></div>`) : '<p>选择品类并启动任务，运行状态和日志会显示在这里。</p>';
   const log = $('#run-log');
   const follow = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
   log.textContent = data.log || '尚无运行日志。';
   if (follow) log.scrollTop = log.scrollHeight;
+  $('#run-log-summary').textContent = run ? '上方显示任务阶段与处理结果。这里是开发排障记录，可能包含调用栈，无需根据英文异常自行判断账号状态。' : '运行后可展开排障记录。';
   const alert = $('#ops-alert');
   alert.hidden = !state.opsFlash && (!data.settings.alertsEnabled || !run?.alert);
-  alert.textContent = state.opsFlash || run?.alert || '';
+  const historicalAlert = !state.opsFlash && Boolean(run?.finishedAt);
+  alert.classList.toggle('is-history', historicalAlert);
+  alert.setAttribute('role', historicalAlert ? 'status' : 'alert');
+  const alertTime = run?.finishedAt ? new Date(run.finishedAt).toLocaleTimeString('zh-CN') : '';
+  const currentLogin = state.browser?.checks?.find((check) => check.key === 'login')?.state === '已登录';
+  const loginNote = currentLogin && /登录提示|登录标记/.test(run?.alert || '') ? ' 当前浏览器页面已显示登录；这条记录不代表现在退出登录。' : '';
+  alert.textContent = state.opsFlash || (run?.alert ? `${run.finishedAt ? `上次运行（${alertTime}）` : '本次运行'}：${run.alert}${loginNote}` : '');
   renderQuoteButtons();
   renderBrowser();
 }
 
+const stageFieldNames = { rfqId: 'RFQ ID', title: '标题', summary: '列表摘要', detailText: '买家需求正文', quantityText: '买家数量', country: '国家/地区',
+  quantity: '数量', widthMm: '宽度 (mm)', heightMm: '高度 (mm)', lengthMm: '长度 (mm)', bottomMm: '底宽 (mm)', capacityOz: '容量 (oz)', gsm: '纸张克重 (gsm)', material: '材料', greaseproof: '防油', printing: '印刷', flute: '楞型', color: '颜色',
+  searchTerm: '搜索词', maxCards: '最多读取', count: '结果数量', cards: '搜索结果', candidates: '新需求', scanned: '扫描数量', unique: '去重后',
+  prompt: '模型请求指令', inputJson: '模型实际输入', requestedModel: '请求模型', provider: '调用方式', analysis: '需求分析结果', fields: '提取规格',
+  missingRequired: '缺失规格', riskFlags: '风险提示', buyerQuestions: '待问买家的问题', quote: '报价规则结果', draft: '拟回复',
+  productName: '商品名称', productDetails: '拟填规格', buyerMessage: '拟发给买家的回复', quoteStatus: '价格状态', submissionStatus: '提交状态',
+  notificationStatus: '提醒状态', fileName: '本机草稿文件', note: '说明', records: '生成记录', savedRecords: '保存记录',
+  runScannedTotal: '本轮总扫描数', newCandidates: '进入分析数', output: '输出', input: '输入' };
+function stageValue(value, depth = 0) {
+  if (value == null || value === '') return '<span class="stage-missing">未记录</span>';
+  if (typeof value !== 'object') return `<span class="stage-value">${esc(value)}</span>`;
+  if (depth > 5) return '<span class="stage-missing">内容过深</span>';
+  if (Array.isArray(value)) return value.length ? `<ol class="stage-array">${value.map((item) => `<li>${stageValue(item, depth + 1)}</li>`).join('')}</ol>` : '<span class="stage-missing">无</span>';
+  return `<dl class="stage-fields">${Object.entries(value).map(([key, item]) => `<div><dt>${esc(stageFieldNames[key] || key)}</dt><dd>${stageValue(item, depth + 1)}</dd></div>`).join('')}</dl>`;
+}
+function renderStageEvidence(data) {
+  return `<p class="stage-source">${esc(data.source || '阶段记录')}${data.completedAt ? ` · 完成于 ${esc(localTime(data.completedAt))}` : ''}</p>
+    ${data.note ? `<p class="stage-note">${esc(data.note)}</p>` : ''}
+    <div class="stage-io"><section><h4>输入</h4>${stageValue(data.input)}</section><section><h4>输出</h4>${stageValue(data.output)}</section></div>`;
+}
+
 const quoteStatusNames = { quoted: '规则价已确认', needs_review: '需要人工复核', conditional_quote: '条件报价', submitted: '已提交', filled_not_submitted: '已回填，未提交', plugin_prepared_not_submitted: '已分析，未提交', dry_run_not_submitted: '试跑，未提交', skipped: '未联系' };
+const quoteCategoryNames = { kraft_food_bag: '食品牛皮纸袋', tumbler_40oz: '40oz 保温杯', corrugated_rsc: '瓦楞运输箱', paper_shopping_bag: '纸质购物袋', cloth_bag: '布袋', folding_carton: '折叠纸盒', unsupported: '暂不支持' };
+const quoteRecommendationNames = { quote: '可进入报价复核', review: '需要人工复核', skip: '暂不报价' };
 const reasonMap = [
   ['Only non-conditional quoted records are eligible', '价格尚未通过确定性规则确认'],
   ['Analysis confidence is below', '抽取置信度未达标'],
@@ -565,32 +716,112 @@ const reasonMap = [
 ];
 function quoteReason(reason) { return reasonMap.find(([original]) => reason.startsWith(original))?.[1] || reason; }
 function quoteMoney(value) { return value == null ? '—' : `$${fmt(value, 4)}`; }
+const quoteDateKey = (value) => { const date = new Date(value); return Number.isFinite(date.getTime()) ? date.toLocaleDateString('sv-SE') : ''; };
+const definiteQuotes = () => (state.quotes?.drafts || []).filter((draft) => draft.definiteQuote === true);
+const quoteEmptyMessage = () => definiteQuotes().length
+  ? '当前筛选没有符合条件的明确报价，请调整搜索、品类或提交进度。'
+  : '当前没有可展示的明确报价。仅当价格规则确认金额，并生成完整拟回复后，RFQ 才会出现在这里。';
+function matchingQuotes() {
+  const words = state.quoteQuery.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  return definiteQuotes().filter((draft) => {
+    if (state.quoteStatusFilter === 'submitted' && draft.submissionStatus !== 'submitted') return false;
+    if (state.quoteStatusFilter === 'unsubmitted' && draft.submissionStatus === 'submitted') return false;
+    if (state.quoteStatusFilter === 'filled_not_submitted' && draft.submissionStatus !== 'filled_not_submitted') return false;
+    if (state.quoteCategoryFilter !== 'all' && draft.categoryId !== state.quoteCategoryFilter) return false;
+    const date = quoteDateKey(draft.createdAt);
+    if (state.quoteDateFrom && (!date || date < state.quoteDateFrom)) return false;
+    if (state.quoteDateTo && (!date || date > state.quoteDateTo)) return false;
+    return words.every((word) => (draft.searchText || '').toLocaleLowerCase().includes(word));
+  });
+}
+
+async function renderFilteredQuotes(refreshDetail = false) {
+  const all = definiteQuotes();
+  const matched = matchingQuotes();
+  const active = matched.filter((draft) => !draft.archivedAt);
+  const submitted = active.filter((draft) => draft.submissionStatus === 'submitted');
+  const visible = matched.filter((draft) => Boolean(draft.archivedAt) === state.quoteShowArchived);
+  const previous = state.quoteSelected;
+  if (!visible.some((draft) => draft.id === state.quoteSelected)) state.quoteSelected = visible[0]?.id || '';
+  $('#quote-workbench-grid').classList.toggle('is-empty', visible.length === 0);
+  $('#quote-detail').hidden = visible.length === 0;
+  $('#quote-filter-count').textContent = `符合 ${visible.length} / ${all.filter((draft) => Boolean(draft.archivedAt) === state.quoteShowArchived).length} 条`;
+  renderSubmittedQuotes(submitted);
+  renderPricedQuotes(active);
+  renderQuoteList();
+  if (refreshDetail || previous !== state.quoteSelected || (!state.quoteDetail && state.quoteSelected)) await loadQuoteDetail();
+  else if (!state.quoteSelected) { state.quoteDetail = null; $('#quote-detail').innerHTML = `<div class="empty">${quoteEmptyMessage()}</div>`; }
+}
 
 async function loadQuotes() {
   try {
     const response = await fetch('/api/quotes');
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     state.quotes = await response.json();
-    $('#submitted-count').textContent = new Set(state.quotes.drafts.filter((draft) => draft.submissionStatus === 'submitted').map((draft) => draft.rfqId)).size;
+    const drafts = definiteQuotes();
+    const active = drafts.filter((draft) => !draft.archivedAt);
+    $('#submitted-count').textContent = new Set(active.filter((draft) => draft.submissionStatus === 'submitted').map((draft) => draft.rfqId)).size;
+    const categories = [...new Set(drafts.map((draft) => draft.categoryId).filter(Boolean))].sort();
+    $('#quote-category-filter').innerHTML = '<option value="all">全部品类</option>' + categories.map((category) => `<option value="${esc(category)}">${esc(quoteCategoryNames[category] || category)}</option>`).join('');
+    if (!categories.includes(state.quoteCategoryFilter)) state.quoteCategoryFilter = 'all';
+    $('#quote-category-filter').value = state.quoteCategoryFilter;
     const linkedDraft = new URL(location.href).searchParams.get('draft');
-    if (!state.quoteSelected && state.quotes.drafts.some((draft) => draft.id === linkedDraft)) state.quoteSelected = linkedDraft;
-    if (!state.quotes.drafts.some((draft) => draft.id === state.quoteSelected)) state.quoteSelected = state.quotes.drafts[0]?.id || null;
-    $('#quote-count').textContent = `${state.quotes.counts.total} 条草稿 · ${state.quotes.counts.quoted} 条规则报价`;
-    renderQuoteList();
-    await loadQuoteDetail();
+    if (state.quoteSelected === null && drafts.some((draft) => draft.id === linkedDraft)) {
+      state.quoteSelected = linkedDraft;
+      state.quoteShowArchived = Boolean(drafts.find((draft) => draft.id === linkedDraft)?.archivedAt);
+    }
+    $('#quote-count').textContent = `${active.length} 条明确报价 · ${active.filter((draft) => draft.submissionStatus === 'submitted').length} 条已验证提交`;
+    await renderFilteredQuotes(true);
   } catch (error) {
     $('#quote-list').innerHTML = `<div class="empty">无法读取报价草稿：${esc(error.message)}</div>`;
   }
 }
 
+function renderSubmittedQuotes(rows) {
+  $('#submitted-quotes-section').hidden = rows.length === 0;
+  $('#submitted-quote-list').innerHTML = rows.length ? rows.map((draft) => `<button type="button" class="submitted-quote-row" data-submitted-draft="${esc(draft.id)}">
+    <strong>${esc(draft.title)}</strong><small>RFQ ${esc(draft.rfqId)} · ${esc(draft.currency === 'USD' && Number.isFinite(draft.totalUsd) ? quoteMoney(draft.totalUsd) : '金额待核对')} · 提交于 ${esc(localTime(draft.submittedAt))}</small>
+  </button>`).join('') : '<p class="empty">目前没有已验证提交的明确报价。</p>';
+  $('#submitted-quote-list').querySelectorAll('[data-submitted-draft]').forEach((button) => button.addEventListener('click', async () => {
+    state.quoteShowArchived = false;
+    state.quoteSelected = button.dataset.submittedDraft;
+    state.quoteArchiveConfirm = false;
+    renderQuoteList();
+    await loadQuoteDetail();
+    $('#quote-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }));
+}
+
+function renderPricedQuotes(rows) {
+  $('#priced-quotes-section').hidden = rows.length === 0;
+  $('#priced-quote-list').innerHTML = rows.length ? rows.map((draft) => `<button type="button" class="submitted-quote-row" data-priced-draft="${esc(draft.id)}">
+    <strong>${esc(draft.title)}</strong><small>${esc(quoteMoney(draft.totalUsd))} · ${esc(quoteStatusNames[draft.quoteStatus] || draft.quoteStatus)} · ${draft.submissionStatus === 'submitted' ? '已提交' : '未提交'} · 生成于 ${esc(localTime(draft.createdAt))}</small>
+  </button>`).join('') : `<p class="empty">${quoteEmptyMessage()}</p>`;
+  $('#priced-quote-list').querySelectorAll('[data-priced-draft]').forEach((button) => button.addEventListener('click', async () => {
+    state.quoteShowArchived = false;
+    state.quoteSelected = button.dataset.pricedDraft;
+    renderQuoteList();
+    await loadQuoteDetail();
+    $('#quote-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }));
+}
+
 function renderQuoteList() {
-  $('#quote-list').innerHTML = state.quotes.drafts.length ? state.quotes.drafts.map((draft) => `<button type="button" data-draft="${esc(draft.id)}" class="quote-row ${state.quoteSelected === draft.id ? 'active' : ''}">
+  const rows = matchingQuotes().filter((draft) => Boolean(draft.archivedAt) === state.quoteShowArchived);
+  const archived = definiteQuotes().filter((draft) => draft.archivedAt).length;
+  $('#quote-list-title').textContent = state.quoteShowArchived ? '已移出的明确报价' : '明确报价草稿';
+  $('#quote-show-archived').textContent = state.quoteShowArchived ? '返回当前草稿' : `查看已移出草稿（${archived}）`;
+  $('#quote-show-archived').disabled = archived === 0 && !state.quoteShowArchived;
+  $('#quote-list').innerHTML = rows.length ? rows.map((draft) => `<button type="button" data-draft="${esc(draft.id)}" class="quote-row ${state.quoteSelected === draft.id ? 'active' : ''}">
     <span class="quote-row-top"><small>${esc(draft.rfqId)}</small><span class="pill ${draft.quoteStatus === 'quoted' ? '' : 'gray'}">${esc(quoteStatusNames[draft.quoteStatus] || draft.quoteStatus)}</span></span>
-    <strong>${esc(draft.title)}</strong><small>${esc(quoteStatusNames[draft.submissionStatus] || draft.submissionStatus)}</small>
-  </button>`).join('') : '<div class="empty">还没有本地 RFQ 报价草稿。</div>';
+    <strong>${esc(draft.title)}</strong>${draft.summary ? `<span class="quote-row-summary">${esc(draft.summary)}</span>` : ''}<small>生成于 ${esc(localTime(draft.createdAt))} · ${esc(quoteStatusNames[draft.submissionStatus] || draft.submissionStatus)}</small>
+    ${Number.isFinite(draft.totalUsd) && draft.currency === 'USD' ? `<small>${draft.quoteStatus === 'conditional_quote' ? '条件金额' : '规则报价'} ${esc(quoteMoney(draft.totalUsd))} · ${draft.submissionStatus === 'submitted' ? '已提交' : '未提交'}</small>` : ''}
+  </button>`).join('') : `<div class="empty">${state.quoteShowArchived ? '没有已移出的明确报价。' : quoteEmptyMessage()}</div>`;
   $('#quote-list').querySelectorAll('[data-draft]').forEach((button) => button.addEventListener('click', async () => {
     state.quoteSelected = button.dataset.draft;
     state.quoteReview = null;
+    state.quoteArchiveConfirm = false;
+    state.quoteArchiveError = '';
     renderQuoteList();
     await loadQuoteDetail();
   }));
@@ -598,7 +829,7 @@ function renderQuoteList() {
 
 async function loadQuoteDetail() {
   const id = state.quoteSelected;
-  if (!id) { $('#quote-detail').innerHTML = '<div class="empty">选择一条草稿，核对报价内容。</div>'; return; }
+  if (!id) { state.quoteDetail = null; $('#quote-detail').innerHTML = `<div class="empty">${quoteEmptyMessage()}</div>`; return; }
   try {
     const response = await fetch(`/api/quote?draft=${encodeURIComponent(id)}`);
     const value = await response.json();
@@ -606,6 +837,8 @@ async function loadQuoteDetail() {
     if (state.quoteSelected !== id) return;
     state.quoteDetail = value;
     state.quoteReview = null;
+    state.quoteArchiveConfirm = false;
+    state.quoteArchiveError = '';
     renderQuoteDetail();
   } catch (error) {
     $('#quote-detail').innerHTML = `<div class="empty">无法读取草稿：${esc(error.message)}</div>`;
@@ -614,19 +847,63 @@ async function loadQuoteDetail() {
 
 function renderQuoteButtons() {
   if (!state.quoteDetail) return;
-  const available = !!state.ops?.settings.browserEnabled && !!state.ops?.settings.quoteEnabled && !state.envLoading && !state.ops?.envChecking && !['running', 'stopping', 'indexing'].includes(state.ops?.run?.status);
+  const idle = !state.envLoading && !state.ops?.envChecking && !['running', 'stopping', 'indexing'].includes(state.ops?.run?.status);
+  const available = !!state.ops?.settings.quoteEnabled && idle;
   const fill = $('#quote-detail [data-quote-action="fill"]');
   const submit = $('#quote-detail [data-quote-action="submit"]');
-  if (fill) fill.disabled = !available || !state.quoteDetail.fillEligible;
-  if (submit) submit.disabled = !available || !state.quoteDetail.submitEligible;
+  if (fill) fill.disabled = !available || !!state.quoteDetail.archivedAt || !state.quoteDetail.fillEligible;
+  if (submit) submit.disabled = !available || !!state.quoteDetail.archivedAt || !state.quoteDetail.submitEligible;
+  $('#quote-detail').querySelectorAll('[data-quote-archive]').forEach((button) => { button.disabled = !idle && button.dataset.quoteArchive !== 'cancel'; });
 }
 
 function quoteFacts(detail) {
   const entries = [['RFQ ID', detail.rfq.id], ['价格状态', quoteStatusNames[detail.quote.status] || detail.quote.status],
-    ['商品', detail.draft.productName], ['数量', detail.quote.quantity], ['单价', quoteMoney(detail.quote.unitPriceUsd)],
+    ['商品', detail.draft.productName || detail.rfq.title], ['数量', detail.quote.quantity ?? detail.rfq.quantityText], ['单价', quoteMoney(detail.quote.unitPriceUsd)],
     ['一次性费用', quoteMoney(detail.quote.setupUsd || 0)], ['总价', quoteMoney(detail.quote.totalUsd)], ['贸易条款', detail.quote.tradeTerm], ['交货地点', detail.draft.port],
-    ['当前浏览器动作', quoteStatusNames[detail.submission.status] || detail.submission.status]];
+    ['当前浏览器动作', quoteStatusNames[detail.submission.status] || detail.submission.status],
+    ['草稿生成时间', localTime(detail.createdAt)], ['文件更新时间', localTime(detail.updatedAt)]];
+  if (detail.submittedAt) entries.push(['实际提交时间', localTime(detail.submittedAt)]);
+  if (detail.archivedAt) entries.push(['移出列表时间', localTime(detail.archivedAt)]);
   return `<div class="quote-facts">${entries.map(([name, value]) => `<div><span>${esc(name)}</span><strong>${esc(value ?? '—')}</strong></div>`).join('')}</div>`;
+}
+
+function quoteList(values, empty) {
+  return Array.isArray(values) && values.length ? `<ul>${values.map((value) => `<li>${esc(value)}</li>`).join('')}</ul>` : `<p class="quote-empty-note">${esc(empty)}</p>`;
+}
+
+function quoteNarrative(detail) {
+  const rfq = detail.rfq || {}, analysis = detail.analysis || {}, quote = detail.quote || {};
+  const fields = Object.entries(analysis.fields || {}).filter(([, value]) => value !== null && value !== undefined && value !== '');
+  const originalUrl = safeAlibabaUrl(rfq.detailUrl);
+  const images = Array.isArray(detail.images) ? detail.images : [];
+  return `<section class="quote-review-section"><div class="quote-review-heading"><span>01 / BUYER</span><h4>买家原始需求</h4></div>
+      <dl class="quote-source-meta"><div><dt>页面数量</dt><dd>${esc(rfq.quantityText || '未记录')}</dd></div><div><dt>国家 / 地区</dt><dd>${esc(rfq.buyer || '未记录')}</dd></div><div><dt>采集时间</dt><dd>${esc(localTime(rfq.collectedAt))}</dd></div></dl>
+      <div class="quote-source-actions">${originalUrl ? `<a href="${esc(originalUrl)}" target="_blank" rel="noopener noreferrer">打开 Alibaba 原始 RFQ ↗</a>` : '<span>这条记录没有可用的原始页面链接</span>'}</div>
+      ${rfq.summary ? `<p class="quote-source-summary">列表摘要：${esc(rfq.summary)}</p>` : ''}
+      <div class="quote-original"><strong>RFQ 详情原文</strong><p>${esc(rfq.detailText || '原始需求正文未保存在这条记录中；请核对 Alibaba 页面。')}</p></div>
+      <div class="quote-buyer-images"><strong>买家图片 · ${images.length} 张</strong>${images.length
+        ? `<div class="quote-image-grid">${images.map((image, position) => `<button type="button" data-quote-image="${image.index}" aria-label="放大查看${esc(image.label)} ${position + 1}"><img loading="lazy" alt="${esc(image.label)} ${position + 1}" src="/api/quote/image?draft=${encodeURIComponent(detail.id)}&index=${image.index}"><span>${esc(image.label)} ${position + 1} · 点击放大</span></button>`).join('')}</div>`
+        : '<p>本次采集没有保存图片；可打开原始 RFQ 页面核对附件。</p>'}</div>
+    </section>
+    <dialog class="quote-image-dialog" aria-label="查看买家图片"><button type="button" class="quote-image-close" aria-label="关闭图片">关闭 ×</button><img alt="放大的买家图片"><p></p></dialog>
+    <section class="quote-review-section"><div class="quote-review-heading"><span>02 / ANALYSIS</span><h4>需求解析与待确认项</h4></div>
+      <p class="quote-review-summary">识别品类：${esc(quoteCategoryNames[analysis.categoryId] || analysis.categoryId || '未分类')} · 建议：${esc(quoteRecommendationNames[analysis.recommendation] || analysis.recommendation || '未记录')} · 置信度：${Number.isFinite(analysis.confidence) ? esc(`${Math.round(analysis.confidence * 100)}%`) : '未记录'}</p>
+      <div class="quote-analysis-grid"><div><strong>已提取规格</strong>${fields.length ? `<dl>${fields.map(([key, value]) => `<div><dt>${esc(stageFieldNames[key] || key)}</dt><dd>${esc(typeof value === 'boolean' ? value ? '是' : '否' : value)}</dd></div>`).join('')}</dl>` : '<p class="quote-empty-note">未提取到可核实规格</p>'}</div>
+        <div><strong>还需确认</strong>${quoteList(analysis.missingRequired, '没有列出缺失字段')}
+          <strong>买家澄清问题</strong>${quoteList(analysis.buyerQuestions, '没有生成澄清问题')}</div></div>
+      ${(analysis.riskFlags || []).length ? `<div class="quote-risk"><strong>风险提示</strong>${quoteList(analysis.riskFlags, '')}</div>` : ''}
+    </section>
+    <section class="quote-review-section"><div class="quote-review-heading"><span>03 / PRICE</span><h4>报价判断</h4></div>
+      <p class="quote-review-summary">${esc(quoteStatusNames[quote.status] || quote.status)} · ${quote.currency === 'USD' && Number.isFinite(quote.totalUsd) ? `参考总额 ${esc(quoteMoney(quote.totalUsd))}` : '尚无可用报价金额'} · ${detail.submission.status === 'submitted' ? '已验证提交' : '未向买家提交'}</p>
+      ${quote.reason ? `<div class="quote-message"><span>规则判断原因</span><p>${esc(quote.reason)}</p></div>` : ''}
+      ${quote.basis ? `<div class="quote-message"><span>价格依据 / 假设</span><p>${esc(quote.basis)}</p></div>` : ''}
+      ${(quote.missingFields || []).length ? `<div class="quote-risk"><strong>价格所缺条件</strong>${quoteList(quote.missingFields, '')}</div>` : ''}
+    </section>
+    <section class="quote-review-section"><div class="quote-review-heading"><span>04 / RESPONSE</span><h4>准备给买家的回复</h4></div>
+      ${detail.hasDraft ? `<div class="quote-message"><span>拟填商品规格</span><p>${esc(detail.draft.productDetails || '未记录')}</p></div>
+        <div class="quote-message"><span>拟发送给买家的完整回复 · 当前仍是草稿</span><p>${esc(detail.draft.buyerMessage || '未记录')}</p></div>`
+      : `<p class="quote-empty-note">本条尚未生成买家回复。先核对上面的缺失规格与价格判断，再决定是否重新分析。</p>`}
+    </section>`;
 }
 
 function renderQuoteDetail() {
@@ -634,6 +911,12 @@ function renderQuoteDetail() {
   if (!detail) return;
   const reasons = detail.fillReasons.length ? detail.fillReasons : ['可审阅并回填浏览器表单'];
   const submitReasons = detail.submitReasons.length ? detail.submitReasons : ['回填证据已核对，可审阅提交'];
+  const canArchive = ['not_submitted', 'skipped', 'plugin_prepared_not_submitted', 'dry_run_not_submitted'].includes(detail.submission.status);
+  const archiveControls = detail.archivedAt
+    ? '<div class="quote-archive-actions"><p>这条草稿已从当前列表移出，原始文件和报价依据仍在本机。</p><button type="button" data-quote-archive="restore">恢复到当前草稿</button></div>'
+    : canArchive ? `<div class="quote-archive-actions"><p>这条草稿没有已验证的浏览器提交动作，可以从当前列表移出；原始证据保留，可随时恢复。</p>
+      ${state.quoteArchiveConfirm ? '<button type="button" data-quote-archive="cancel">取消</button><button type="button" class="danger" data-quote-archive="confirm">确认移出这条草稿</button>' : '<button type="button" class="danger" data-quote-archive="prompt">移出当前草稿列表</button>'}</div>`
+      : '<div class="quote-archive-actions"><p>这条记录涉及浏览器报价动作或状态不明，需保留核对，不能从列表移出。</p></div>';
   const review = state.quoteReview ? `<div class="quote-confirm" id="quote-confirm">
     <strong>${state.quoteReview === 'fill' ? '确认回填这一条 RFQ' : '确认向买家提交这一条报价'}</strong>
     <p>请核对上面的 RFQ、数量、单价、总价和完整买家留言；草稿在确认后发生变化将被拒绝。</p>
@@ -643,13 +926,35 @@ function renderQuoteDetail() {
   </div>` : '';
   $('#quote-detail').innerHTML = `<div class="detail-top"><span class="kicker">RFQ QUOTE REVIEW</span><span class="detail-id">${esc(detail.id)}</span></div>
     <h3 class="quote-title">${esc(detail.rfq.title)}</h3>${quoteFacts(detail)}
-    <div class="quote-message"><span>商品规格</span><p>${esc(detail.draft.productDetails || '未记录')}</p></div>
-    <div class="quote-message"><span>将填入买家留言</span><p>${esc(detail.draft.buyerMessage || '未记录')}</p></div>
+    ${quoteNarrative(detail)}
     <div class="quote-block"><strong>回填条件</strong><ul>${reasons.map((reason) => `<li>${esc(quoteReason(reason))}</li>`).join('')}</ul></div>
     <div class="quote-block"><strong>提交条件</strong><ul>${submitReasons.map((reason) => `<li>${esc(quoteReason(reason))}</li>`).join('')}</ul></div>
     ${detail.screenshotAvailable ? `<div class="quote-shot"><strong>上次回填截图</strong><img alt="浏览器报价表单回填截图" src="/api/quote/screenshot?draft=${encodeURIComponent(detail.id)}"></div>` : ''}
-    <div class="quote-actions"><button type="button" class="light" data-quote-action="fill">审阅并回填</button><button type="button" class="primary" data-quote-action="submit">审阅并提交</button></div>${review}`;
+    <div class="quote-actions"><button type="button" class="light" data-quote-action="fill">审阅并回填</button><button type="button" class="primary" data-quote-action="submit">审阅并提交</button></div>${archiveControls}
+    ${state.quoteArchiveError ? `<p class="ops-alert">${esc(state.quoteArchiveError)}</p>` : ''}${review}`;
   $('#quote-detail').querySelectorAll('[data-quote-action]').forEach((button) => button.addEventListener('click', () => { state.quoteReview = button.dataset.quoteAction; renderQuoteDetail(); $('#quote-confirm').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }));
+  const imageDialog = $('#quote-detail .quote-image-dialog');
+  $('#quote-detail').querySelectorAll('[data-quote-image]').forEach((button) => button.addEventListener('click', () => {
+    const image = button.querySelector('img');
+    imageDialog.querySelector('img').src = image.src;
+    imageDialog.querySelector('img').alt = image.alt;
+    imageDialog.querySelector('p').textContent = image.alt;
+    imageDialog.showModal();
+  }));
+  imageDialog.querySelector('.quote-image-close').addEventListener('click', () => imageDialog.close());
+  imageDialog.addEventListener('click', (event) => { if (event.target === imageDialog) imageDialog.close(); });
+  $('#quote-detail').querySelectorAll('[data-quote-archive]').forEach((button) => button.addEventListener('click', async () => {
+    const action = button.dataset.quoteArchive;
+    if (action === 'prompt' || action === 'cancel') { state.quoteArchiveConfirm = action === 'prompt'; renderQuoteDetail(); return; }
+    try {
+      state.quoteArchiveError = '';
+      await opsRequest('/api/quotes/archive', { id: detail.id, archived: action === 'confirm' });
+      state.quoteArchiveConfirm = false;
+      state.quoteShowArchived = false;
+      state.quoteSelected = action === 'confirm' ? '' : detail.id;
+      await loadQuotes();
+    } catch (error) { state.quoteArchiveError = error.message; renderQuoteDetail(); }
+  }));
   if (state.quoteReview) {
     const sync = () => { $('#quote-confirm-run').disabled = !$('#quote-approve').checked || $('#quote-confirm-id').value.trim() !== detail.rfq.id; };
     $('#quote-approve').addEventListener('change', sync);
@@ -683,6 +988,7 @@ async function updateOps() {
     const response = await fetch('/api/ops/status');
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     state.ops = await response.json();
+    handleNotifications(state.ops.notifications);
     if (!$('#ops-term').options.length) {
       $('#ops-term').innerHTML = `<option value="__all__">全部配置品类</option>` +
         state.ops.searchTerms.map((term) => `<option value="${esc(term)}">${esc(term)}</option>`).join('');
@@ -750,6 +1056,16 @@ async function start() {
     $('#browser-inspect').addEventListener('click', () => browserAction('inspect'));
     $('#browser-login-import').addEventListener('click', importBrowserLogin);
     document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => runAction(button.dataset.action)));
+    document.addEventListener('click', async (event) => {
+      const button = event.target.closest('[data-service-test]');
+      if (!button || button.disabled) return;
+      const key = button.dataset.serviceTest;
+      state.opsFlash = '';
+      button.disabled = true; button.textContent = '正在检测…';
+      try { await opsRequest(`/api/desktop/${key === 'model' ? 'model' : 'ocr'}/test`, {}); }
+      catch (error) { state.opsFlash = `${key === 'model' ? '模型' : 'OCR'} 检测失败：${error.message}`; }
+      finally { await loadEnv(); renderOps(); }
+    });
     $('#env-recheck').addEventListener('click', () => loadEnv(true));
     $('#extension-prepare').addEventListener('click', prepareExtension);
     $('#extension-copy-path').addEventListener('click', () => copyExtensionField('#extension-path', '插件目录'));
@@ -761,28 +1077,39 @@ async function start() {
       try {
         const result = await opsRequest('/api/notifications/test', {});
         state.notificationFlash = result.detail;
-      } catch (error) { state.notificationFlash = error.message; }
+      } catch (error) { state.notificationFlash = error.message; showNotificationToast('测试通知未发送', error.message); }
       finally { state.notificationTesting = false; await updateOps(); }
     });
+    $('#notification-toast-close').addEventListener('click', () => { $('#notification-toast').hidden = true; });
+    $('#notification-toast-open').addEventListener('click', () => openNotificationDraft(state.notificationToastDraft));
+    $('#notification-history-list').addEventListener('click', (event) => {
+      const button = event.target.closest('[data-notification-draft]');
+      if (button) void openNotificationDraft(button.dataset.notificationDraft);
+    });
+    $('#quote-show-archived').addEventListener('click', async () => {
+      state.quoteShowArchived = !state.quoteShowArchived;
+      state.quoteSelected = '';
+      state.quoteArchiveConfirm = false;
+      await renderFilteredQuotes(true);
+    });
+    $('#quote-search').addEventListener('input', (event) => { state.quoteQuery = event.target.value; void renderFilteredQuotes(); });
+    $('#quote-status-filter').addEventListener('change', (event) => { state.quoteStatusFilter = event.target.value; void renderFilteredQuotes(); });
+    $('#quote-category-filter').addEventListener('change', (event) => { state.quoteCategoryFilter = event.target.value; void renderFilteredQuotes(); });
+    $('#quote-date-from').addEventListener('change', (event) => { state.quoteDateFrom = event.target.value; void renderFilteredQuotes(); });
+    $('#quote-date-to').addEventListener('change', (event) => { state.quoteDateTo = event.target.value; void renderFilteredQuotes(); });
     document.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', async () => {
       // 这里只改变逐单工作台权限，不启动扫描，也不自动联系买家。
-      const settings = button.dataset.mode === 'auto'
-        ? { browserEnabled: true, quoteEnabled: true }
-        : { quoteEnabled: false };
+      const settings = { quoteEnabled: button.dataset.mode === 'auto' };
       try { state.opsFlash = ''; state.ops = await opsRequest('/api/ops/settings', settings); renderOps(); await loadEnv(true); }
       catch (error) { state.opsFlash = error.message; renderOps(); }
     }));
-    for (const [key, id] of [['browserEnabled', '#browser-enabled'], ['browserEnabled', '#browser-page-enabled'], ['alertsEnabled', '#alerts-enabled'], ['notificationsEnabled', '#notifications-enabled']]) {
+    for (const [key, id] of [['alertsEnabled', '#alerts-enabled'], ['notificationsEnabled', '#notifications-enabled']]) {
       $(id).addEventListener('change', async (event) => {
         try {
           state.opsFlash = '';
           if (key === 'notificationsEnabled') state.notificationFlash = '';
           state.ops = await opsRequest('/api/ops/settings', { [key]: event.target.checked });
           renderOps();
-          // 更新操作授权不改变登录状态；桌面版继续只读检查自有窗口，
-          // Web / CLI 关闭授权后不会连接 Chrome。
-          if (key === 'browserEnabled') await loadEnv(true);
-          if (key === 'browserEnabled') await loadBrowser();
         }
         catch (error) { event.target.checked = !event.target.checked; state.opsFlash = error.message; renderOps(); }
       });
@@ -798,7 +1125,7 @@ async function start() {
     await loadBrowser();
     setView(new URL(location.href).searchParams.get('view') || (desktopInfo?.desktop && !desktopInfo.settings.modelReady ? 'settings' : 'cases'));
     if (new URL(location.href).searchParams.has('draft') && state.view === 'console') $('#quote-detail')?.scrollIntoView({ block: 'start' });
-    setInterval(() => { if (['console', 'browser'].includes(state.view) || ['running', 'stopping', 'indexing'].includes(state.ops?.run?.status)) updateOps(); if (['console', 'browser'].includes(state.view)) loadBrowser(); }, 2000);
+    setInterval(() => { if (state.ops?.settings.notificationsEnabled || ['console', 'browser'].includes(state.view) || ['running', 'stopping', 'indexing'].includes(state.ops?.run?.status)) updateOps(); if (['console', 'browser'].includes(state.view)) loadBrowser(); }, 2000);
   } catch (error) {
     $('#case-detail').innerHTML = `<div class="empty">无法读取 CASE 数据：${esc(error.message)}<br>请先运行 npm run cases:build，然后启动本地页面。</div>`;
   }
