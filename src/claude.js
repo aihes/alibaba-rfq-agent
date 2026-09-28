@@ -121,11 +121,13 @@ const quoteRationaleSchema = {
   }
 };
 
-export async function callAnthropicHttp(config, system, payload, maxTokens = 1600) {
+export async function callAnthropicHttp(config, system, payload, maxTokens = 1600, { request = fetch } = {}) {
   if (!config.anthropicApiKey || !config.anthropicModel) {
     throw new Error("anthropic-http requires ANTHROPIC_API_KEY and ANTHROPIC_HTTP_MODEL");
   }
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const url = new URL(config.anthropicApiUrl || "https://api.anthropic.com/v1/messages");
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || !url.pathname.endsWith("/v1/messages")) throw new Error("Anthropic 兼容接口须为无凭据的 HTTPS messages 地址");
+  const response = await request(url.href, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -137,6 +139,7 @@ export async function callAnthropicHttp(config, system, payload, maxTokens = 160
       max_tokens: maxTokens,
       temperature: 0,
       system,
+      ...(["open.bigmodel.cn", "api.z.ai"].includes(url.hostname) ? { thinking: { type: "disabled" } } : {}),
       messages: [{ role: "user", content: JSON.stringify(payload) }]
     }),
     redirect: "error",
@@ -144,6 +147,7 @@ export async function callAnthropicHttp(config, system, payload, maxTokens = 160
   });
   if (!response.ok) throw new Error(`Anthropic HTTP ${response.status}，请检查密钥、模型权限或余额`);
   const data = await response.json();
+  if (data.error || data.stop_reason === "max_tokens") throw new Error("模型返回错误或结果被截断");
   return extractJson(data.content?.filter((block) => block.type === "text").map((block) => block.text).join("\n") || "");
 }
 

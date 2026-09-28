@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "RFQ助手 · Alibaba 登录导出",
+  "version": "1.0.0",
+  "description": "由用户主动导出 Alibaba 登录记录，供本机 RFQ 助手迁移使用。",
+  "permissions": ["cookies"],
+  "host_permissions": ["https://*.alibaba.com/*", "https://alibaba.com/*"],
+  "action": { "default_popup": "popup.html" }
+}

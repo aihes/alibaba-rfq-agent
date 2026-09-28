@@ -9,7 +9,7 @@ export async function callModelHttp(config, system, payload, maxTokens = 1600, {
   if (url.protocol !== "https:" || url.username || url.password) throw new Error("模型接口必须使用 HTTPS");
   const body = { model: config.modelName, temperature: 0, max_tokens: maxTokens,
     messages: [{ role: "system", content: system }, { role: "user", content: JSON.stringify(payload) }] };
-  if (url.hostname === "open.bigmodel.cn") body.thinking = { type: "disabled" };
+  if (["open.bigmodel.cn", "api.z.ai"].includes(url.hostname)) body.thinking = { type: "disabled" };
   const response = await request(url.href, { method: "POST", redirect: "error",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.modelApiKey}` },
     body: JSON.stringify(body), signal: AbortSignal.timeout(120000) });

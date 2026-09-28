@@ -27,6 +27,7 @@ test("settings persist encrypted secrets, never return them, blank preserves and
   const cipher = { isEncryptionAvailable: () => true, encryptString: (v) => Buffer.from(v).map((x) => x ^ 0x55), decryptString: (v) => Buffer.from(v).map((x) => x ^ 0x55).toString() };
   try {
     const settings = new DesktopSettings(root, cipher);
+    settings.save({ agentProvider: "openai-http" });
     const info = settings.save({ modelApiKey: "test-model-key", ocrApiKey: "test-ocr-key" });
     assert.equal(info.modelKeyConfigured, true); assert.ok(!JSON.stringify(info).includes("test-model-key"));
     assert.ok(!fs.readFileSync(settings.file, "utf8").includes("test-model-key"));
@@ -37,9 +38,18 @@ test("settings persist encrypted secrets, never return them, blank preserves and
     assert.equal(restored.info().ocrKeyConfigured, true);
     restored.save({ clearSecrets: ["modelApiKey", "ocrApiKey"] }); assert.equal(new DesktopSettings(root, cipher).info().modelKeyConfigured, false);
     assert.throws(() => restored.save({ modelApiUrl: "http://example.com" }), /HTTPS/);
-    assert.throws(() => restored.save({ agentProvider: "local-claude-sdk" }));
+    assert.throws(() => restored.save({ agentProvider: "unknown-provider" }));
     const unavailable = new DesktopSettings(root, { ...cipher, isEncryptionAvailable: () => false });
     assert.throws(() => unavailable.save({ modelApiKey: "never-plaintext" }), /加密不可用/);
+  } finally { fs.rmSync(root, { recursive: true }); }
+});
+test("opening an unconfigured workbench does not request keychain access", () => {
+  const root = temporary();
+  try {
+    const settings = new DesktopSettings(root, { isEncryptionAvailable: () => assert.fail("GET must not access keychain"), decryptString: () => assert.fail("no saved secrets") });
+    assert.equal(settings.info().encryptedStorage, null);
+    assert.equal(settings.info().modelKeyConfigured, false);
+    assert.equal(settings.environment().MODEL_API_KEY, "");
   } finally { fs.rmSync(root, { recursive: true }); }
 });
 test("desktop HTTP retains local authorization and evidence allowlist, never probes Chrome when disabled", async () => {
@@ -79,6 +89,10 @@ test("HTTP model adapter returns final JSON only, rejects truncation and does no
     return Response.json({ choices: [{ finish_reason: "stop", message: { content: '{"ok":true}', reasoning_content: "private scratchpad" } }] });
   } });
   assert.deepEqual(result, { ok: true });
+  await callModelHttp({ ...config, modelApiUrl: "https://api.z.ai/api/paas/v4/chat/completions" }, "JSON only", {}, 256, { request: async (_url, options) => {
+    assert.equal(JSON.parse(options.body).thinking.type, "disabled");
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: '{"ok":true}' } }] });
+  } });
   await assert.rejects(() => callModelHttp(config, "", {}, 100, { request: async () => new Response(config.modelApiKey, { status: 401 }) }), /HTTP 401/);
   await assert.rejects(() => callModelHttp(config, "", {}, 100, { request: async () => Response.json({ choices: [{ finish_reason: "length" }] }) }), /截断/);
 });

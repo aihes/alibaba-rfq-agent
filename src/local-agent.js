@@ -54,6 +54,7 @@ export async function runLocalAgentJson(config, {
         pathToClaudeCodeExecutable: config.localClaudeExecutable,
         env: {
           ...process.env,
+          ...config.localClaudeEnvironment,
           CLAUDE_AGENT_SDK_CLIENT_APP: "alibaba-rfq-agent/0.5.0"
         },
         outputFormat: config.localClaudeStructuredOutput

@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import { spawn, execFile } from "node:child_process";
 
 const now = () => new Date().toISOString();
-const attention = /CAPTCHA|verification challenge|login is required|Cannot attach to the existing Chrome session|Chrome Bridge or Alibaba requires human attention|needs_manual_review|Submit was clicked, but success could not be verified/i;
+const attention = /CAPTCHA|verification challenge|login is required|Cannot attach to the existing Chrome session|Browser connection or Alibaba requires human attention|Chrome Bridge or Alibaba requires human attention|needs_manual_review|Submit was clicked, but success could not be verified|内置浏览器|页面操作失败/i;
 function read(file, fallback) { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return fallback; } }
 function write(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -12,12 +12,29 @@ function write(file, value) {
   fs.renameSync(`${file}.tmp`, file);
 }
 
+/** 普通用户只需知道窗口和账号是否可用；CDP 附着仅是短暂的内部状态，
+ * 不能用“当前未附着”推断浏览器故障，也不能用 Agent 开关推断登录态。
+ */
+function browserChecks(b) {
+  const result = b.loading ? null : b.inspection;
+  const loginStates = { logged_in: "已登录", login_required: "需要登录", captcha: "需要验证", unsupported_page: "请打开 RFQ 列表", unknown: "待确认" };
+  const loginState = !b.opened ? "请先打开浏览器" : b.loading ? "页面加载中" : b.inspectionError ? "暂时无法确认" : result ? loginStates[result.status] : b.checking ? "正在检查" : b.busy ? "任务运行中" : "正在确认";
+  return [
+    { key: "bridge", ok: b.opened && !b.error, label: "阿里巴巴浏览器", state: !b.opened ? "尚未打开" : b.error ? "页面加载异常" : b.loading ? "页面加载中" : "已打开",
+      detail: b.error || (b.opened ? b.title || "阿里巴巴窗口已打开，关闭窗口会保留在后台" : "打开应用自带的浏览器，使用你的 Alibaba 账号登录"), action: "open_browser", actionLabel: b.opened ? "显示浏览器" : "打开浏览器" },
+    { key: "login", ok: result?.status === "logged_in" && !b.inspectionError, label: "Alibaba 账号", state: loginState,
+      detail: !b.opened ? "打开浏览器后自动检查登录状态" : b.loading ? "等待页面加载完成后自动检查" : b.inspectionError || result?.detail || (b.busy && !b.checking ? "任务完成后自动更新登录状态" : "正在读取当前页面的登录提示"),
+      checkedAt: result?.checkedAt || null,
+      ...(b.opened && !b.loading && result?.status !== "logged_in" ? { action: result?.status === "unsupported_page" ? "open_rfq" : "open_browser", actionLabel: result?.status === "unsupported_page" ? "打开 RFQ 列表" : result?.status === "captcha" ? "去处理验证" : "打开浏览器登录" } : {}) }
+  ];
+}
+
 /** 与 Web 控制台相同的权限边界。每个任务独立进程组，退出只清理本
  * 应用创建的任务，不杀 Chrome。任务日志永远不包含传入的环境密钥。
  */
 export class OperatorConsole {
-  constructor({ resources, workspace, environment = () => ({}), notify, spawnProcess = spawn, desktop = false }) {
-    Object.assign(this, { resources, workspace, environment, notify, spawnProcess, desktop });
+  constructor({ resources, workspace, environment = () => ({}), notify, spawnProcess = spawn, desktop = false, embeddedBrowser, revokeBrowser = () => {} }) {
+    Object.assign(this, { resources, workspace, environment, notify, spawnProcess, desktop, embeddedBrowser, revokeBrowser });
     this.opsDir = path.join(workspace, "data/case-catalog/ops");
     this.settingsFile = path.join(this.opsDir, "settings.json");
     this.lastFile = path.join(this.opsDir, "last-run.json");
@@ -83,7 +100,7 @@ export class OperatorConsole {
   }
   snapshot() {
     return { settings: this.settings, searchTerms: this.searchTerms, run: this.current || this.last,
-      log: this.tail(), serverTime: now(), envChecking: Boolean(this.probe),
+      log: this.tail(), serverTime: now(), envChecking: Boolean(this.probe || this.embeddedBrowser?.inspecting || this.browserImporting),
       notifications: { supported: this.desktop || process.platform === "darwin", last: read(path.join(this.opsDir, "notification-status.json"), null) } };
   }
   updateSettings(changes) {
@@ -91,34 +108,67 @@ export class OperatorConsole {
     if (changes.quoteEnabled && !(changes.browserEnabled ?? this.settings.browserEnabled)) throw new Error("请先开启浏览器操作");
     if ("browserEnabled" in changes) { this.cache = null; this.generation++; }
     this.settings = { ...this.settings, ...changes };
+    if (changes.browserEnabled === false || changes.quoteEnabled === false) this.revokeBrowser();
     if (!this.settings.browserEnabled) { this.settings.quoteEnabled = false; this.kill(this.probe, "SIGKILL"); }
     write(this.settingsFile, this.settings);
     if (this.current && ((!this.settings.browserEnabled && this.current.kind !== "refresh") || (!this.settings.quoteEnabled && this.current.kind.startsWith("quote_")))) this.stop();
     return this.snapshot();
   }
-  assertIdle() { if (this.closed) throw new Error("应用正在退出"); if (this.current || this.quotePreparing) throw new Error("已有任务正在运行，请先停止"); if (this.probe) throw new Error("环境检测正在进行，请稍后再试"); }
+  assertIdle() { if (this.closed) throw new Error("应用正在退出"); if (this.current || this.quotePreparing) throw new Error("已有任务正在运行，请先停止"); if (this.probe || this.embeddedBrowser?.inspecting || this.browserImporting) throw new Error("环境检测或登录导入正在进行，请稍后再试"); }
+  async browserStatus(force = false) {
+    // 任务占用时保留已有检查结果，不打断运行。Agent 权限不影响只读状态。
+    const browser = this.closed || this.current || this.quotePreparing || this.probe || this.browserImporting
+      ? this.embeddedBrowser.info() : await this.embeddedBrowser.status(force);
+    return { ...browser, checks: browserChecks(browser) };
+  }
   async envCheck(force = false) {
+    const embedded = Boolean(this.embeddedBrowser);
     const checks = [
-      { key: "node", ok: true, label: this.desktop ? "内置运行环境" : "Node.js 运行环境", detail: this.desktop ? "已随应用安装，无需另装 Node 或 Python" : process.version },
-      { key: "plugin", ok: fs.existsSync(path.join(this.resources, "plugins/alibaba-rfq-midscene/scripts/cli.mjs")), label: "Midscene 本地适配脚本", detail: "Chrome 扩展仍需按下方引导加载" },
-      { key: "bridge", ok: false, label: "Chrome Bridge 连接", detail: "未检测" },
-      { key: "login", ok: false, label: "Alibaba 登录态", detail: "未检测" }
+      { key: "node", ok: true, label: this.desktop ? "内置运行环境" : "Node.js 运行环境", detail: this.desktop ? `Node ${process.versions.node} · Electron ${process.versions.electron || "开发测试环境"} · Chromium ${process.versions.chrome || "见浏览器页"}` : process.version, help: "桌面版随应用提供，无需另装开发环境" },
+      { key: "plugin", ok: fs.existsSync(path.join(this.resources, embedded ? "src/electron-browser.js" : "plugins/alibaba-rfq-midscene/scripts/cli.mjs")), label: embedded ? "内置 Chromium 适配器" : "Midscene 本地适配脚本", detail: embedded ? "随应用提供，无需安装 Chrome 插件" : "Chrome 扩展仍需按下方引导加载" },
+      { key: "bridge", ok: false, label: embedded ? "阿里巴巴浏览器" : "Chrome Bridge 连接", detail: "未检测" },
+      { key: "login", ok: false, label: "Alibaba 账号", detail: "未检测" }
     ];
-    const report = (status, reason) => { if (reason) checks.slice(2).forEach((x) => { x.detail = reason; }); return { ok: checks.every((x) => x.ok), checks, status, checkedAt: now() }; };
+    if (embedded) {
+      const state = this.embeddedBrowser.info();
+      checks.push({ key: "window", ok: state.opened, required: false, label: "浏览器窗口与当前页面", detail: state.opened ? `${state.visible ? "前台显示" : "后台保留"} · ${state.page || state.origin || "页面加载中"}` : "尚未打开浏览器", help: "在左侧「浏览器」打开、导航或检测页面；关闭窗口会保留会话" });
+      checks.push({ key: "session", ok: true, label: "独立登录会话", detail: "Alibaba 专用持久会话 · 与个人 Chrome 分开", help: "升级到内置浏览器后须在这里登录；应用不复制个人浏览器身份数据" });
+    }
+    if (this.desktop) {
+      const env = this.environment();
+      const localClaude = env.AGENT_PROVIDER === "local-claude-sdk", modelReady = localClaude ? Boolean(env.LOCAL_CLAUDE_EXECUTABLE) : Boolean(env.MODEL_API_KEY);
+      checks.push({ key: "model", ok: modelReady, required: false, label: "需求分析模型",
+        detail: modelReady ? localClaude ? `本机 Claude · ${env.LOCAL_CLAUDE_MODEL || "继承用户模型"}` : `${env.MODEL_NAME || "已配置模型"} · ${env.RFQ_MODEL_CONFIG_SOURCE || "已保存配置"}`
+          : localClaude ? "未找到本机 Claude；请安装或在设置中选择 GLM HTTP" : "未配置模型 API Key",
+        help: "在「设置」测试本机 Claude 或 GLM HTTP；此处只检查配置，不触发模型调用" });
+      checks.push({ key: "ocr", ok: env.OCR_PROVIDER === "off" || Boolean(env.GLM_OCR_API_KEY), required: false, label: "图片文字识别", detail: env.OCR_PROVIDER === "off" ? "图片识别已关闭" : env.GLM_OCR_API_KEY ? "GLM OCR · API Key 可用" : "GLM OCR · 尚未配置 API Key", help: "未调用 OCR 服务，不产生 API 用量；在设置页查看密钥来源" });
+      checks.push({ key: "port", ok: Boolean(env.QUOTE_PORT), required: false, label: "报价交货地点", detail: env.QUOTE_PORT || "尚未核实交货地点 / 港口", help: "缺失时可浏览或扫描，但报价须先人工核实并在设置页填写" });
+    }
+    const report = (status, reason) => { if (reason) checks.filter((x) => ["bridge", "login"].includes(x.key)).forEach((x) => { x.detail = reason; }); return { ok: checks.filter((x) => x.required !== false).every((x) => x.ok), checks, status, checkedAt: now() }; };
     if (this.closed) return report("skipped", "应用正在退出");
+    if (embedded) {
+      // 桌面版读取自有窗口，无需启动需要 Agent 授权的 status worker。
+      // Web / CLI 仍走下方授权 Bridge 路径，不能借状态查询连接个人 Chrome。
+      const browser = await this.browserStatus(force);
+      checks.splice(2, 2, ...browser.checks);
+      return { ...report("checked"), browser };
+    }
     if (!this.settings.browserEnabled) return report("skipped", "浏览器控制已关闭；开启后才检测连接和登录态");
-    if (this.current || this.quotePreparing || this.probe) return report("skipped", "任务或检测正在进行；完成后再检测");
+    if (this.current || this.quotePreparing || this.probe || this.embeddedBrowser?.inspecting) return report("skipped", "任务或检测正在进行；完成后再检测");
     if (!force && this.cache && Date.now() - this.cache.at < 20000) return this.cache.value;
     const generation = this.generation;
     try {
       const result = await this.runJson("plugins/alibaba-rfq-midscene/scripts/cli.mjs", ["status"], 30000, (child) => { this.probe = child; });
       if (generation !== this.generation || !this.settings.browserEnabled) return report("skipped", "授权已变化，本次检测已取消");
-      checks[2].ok = result.connected === true; checks[2].detail = result.connected ? `已连接（tab ${result.tabId}）` : "请在 Chrome 中开启 Midscene Bridge";
-      checks[3].ok = result.connected === true && result.loggedIn === true; checks[3].detail = checks[3].ok ? "已登录 Alibaba" : "请人工在监听 Chrome 中登录 Alibaba";
+      checks[2].ok = result.connected === true; checks[2].detail = result.connected ? `已连接（${embedded ? "应用窗口" : "tab"} ${result.tabId}）` : embedded ? "请打开应用内的阿里巴巴浏览器" : "请在 Chrome 中开启 Midscene Bridge";
+      checks[3].ok = result.connected === true && result.loggedIn === true;
+      checks[3].detail = checks[3].ok ? "当前 RFQ 页面已检测到登录标记" : /verification challenge/i.test(result.attention) ? "检测到验证码或安全验证，请停止任务并手动处理" : /login is required/i.test(result.attention) ? "尚未登录或登录失效，请在内置浏览器手动登录" : result.attention || (embedded ? "请在应用内的阿里巴巴窗口手动登录" : "请人工在监听 Chrome 中登录 Alibaba");
+      checks[2].help = "这是本次实际连接检测；任务会再次连接并检查页面，空闲时 CDP 会断开";
+      checks[3].help = "进入浏览器页可单独执行只读登录检测，无需开启 Agent 控制";
     } catch {
       return generation !== this.generation || !this.settings.browserEnabled
         ? report("skipped", "授权已变化，本次检测已取消")
-        : report("checked", "检测失败或超时，请检查 Chrome、插件和登录状态");
+        : report("checked", embedded ? "检测失败或超时，请打开内置浏览器，检查网络与登录状态" : "检测失败或超时，请检查 Chrome、插件和登录状态");
     }
     finally { this.probe = null; }
     const value = report("checked"); this.cache = { at: Date.now(), value }; return value;
@@ -145,7 +195,11 @@ export class OperatorConsole {
     const { kind, term = this.searchTerms[0], limit = 1 } = request || {};
     if (!["refresh", "scan", "once", "watch"].includes(kind) || ![...this.searchTerms, "__all__"].includes(term) || !Number.isInteger(limit) || limit < 1 || limit > 3) throw new Error("任务参数无效");
     if (kind !== "refresh" && !this.settings.browserEnabled) throw new Error("请先开启浏览器操作");
-    if (this.desktop && ["once", "watch"].includes(kind) && !this.environment().MODEL_API_KEY) throw new Error("请先在模型设置中填写 API Key 并保存");
+    if (this.desktop && ["once", "watch"].includes(kind)) {
+      const env = this.environment();
+      if (env.AGENT_PROVIDER === "local-claude-sdk" && !env.LOCAL_CLAUDE_EXECUTABLE) throw new Error("未找到本机 Claude，请安装后重试或在设置中选择 GLM HTTP");
+      if (env.AGENT_PROVIDER !== "local-claude-sdk" && !env.MODEL_API_KEY) throw new Error("请先在模型设置中填写 API Key 并保存");
+    }
     const script = kind === "refresh" ? "scripts/build_case_catalog.mjs" : kind === "scan" ? (term === "__all__" ? "scripts/scan_all_terms.mjs" : "plugins/alibaba-rfq-midscene/scripts/cli.mjs") : "src/cli.js";
     const args = kind === "scan" && term !== "__all__" ? ["scan", "--term", term, "--max", "10"] : ["once", "watch"].includes(kind) ? [kind] : [];
     return this.launch({ kind, term: kind === "refresh" ? null : term, limit }, script, args,
@@ -183,7 +237,7 @@ export class OperatorConsole {
   stop() {
     if (!this.current || !this.process) throw new Error("当前没有运行中的任务");
     if (this.current.status === "indexing") throw new Error("正在更新 CASE 列表，请稍后");
-    this.current.status = "stopping"; this.kill(this.process);
+    this.current.status = "stopping"; this.revokeBrowser(); this.kill(this.process);
     const child = this.process;
     setTimeout(() => { if (this.process === child) this.kill(child, "SIGKILL"); }, 2000).unref();
     return this.snapshot();
@@ -196,7 +250,7 @@ export class OperatorConsole {
     return this.runJson("scripts/notify-console.mjs", ["test"], 25000);
   }
   async close() {
-    this.closed = true; this.generation++; this.kill(this.probe, "SIGKILL");
+    this.closed = true; this.generation++; this.revokeBrowser(); this.kill(this.probe, "SIGKILL");
     for (const extra of this.children) if (extra !== this.process) this.kill(extra, "SIGKILL");
     const child = this.process;
     if (child) {

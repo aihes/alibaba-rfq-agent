@@ -15,6 +15,7 @@ files:
   - config/default.json
   - config/pricing-rules.json
   - plugins/alibaba-rfq-midscene/scripts/**
+  - plugins/alibaba-login-export/**
   - scripts/build_case_catalog.mjs
   - scripts/console-quote.mjs
   - scripts/scan_all_terms.mjs

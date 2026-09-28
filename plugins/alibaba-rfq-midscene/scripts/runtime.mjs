@@ -231,14 +231,16 @@ export function readDraft(fileArg) {
 
 export async function browserStatus() {
   const config = loadConfig();
-  return withBrowser(config, async ({ page, selectedTab }) => {
-    await assertAlibabaReady(page);
+  return withBrowser(config, async ({ page, selectedTab, provider }) => {
+    let attention = "";
+    try { await assertAlibabaReady(page); } catch (error) { attention = error.message; }
     const body = await page.locator("body").innerText({ timeout: 15000 }).catch(() => "");
     return {
-      provider: "chrome-bridge",
+      provider,
       connected: true,
-      loggedIn: /退出|My Alibaba|立即报价|RFQ 详情|Order\b|Favorites\b/i.test(body.slice(0, 5000)),
-      url: page.url(),
+      loggedIn: !attention && /退出|My Alibaba|立即报价|RFQ 详情|Order\b|Favorites\b|form-submit/i.test(body.slice(0, 5000)),
+      attention,
+      url: attention ? new URL(page.url()).origin : page.url(),
       title: selectedTab?.title || "",
       tabId: selectedTab?.id || null
     };
@@ -249,15 +251,15 @@ export async function scanRfqs({ searchTerm, maxCards = 20 }) {
   if (!String(searchTerm || "").trim()) throw new Error("searchTerm is required");
   const config = loadConfig();
   config.maxCardsPerSearch = clamp(maxCards, 1, 30);
-  return withBrowser(config, async ({ page }) => {
+  return withBrowser(config, async ({ page, provider, browserMode }) => {
     const cards = await collectSearchPage(page, config, String(searchTerm).trim());
     const runId = `${compactTimestamp()}-${slug(searchTerm)}`;
     const paths = runPaths(runId);
     const record = {
       runId,
       recordedAt: new Date().toISOString(),
-      browserMode: "existing-chrome",
-      provider: "chrome-bridge",
+      browserMode,
+      provider,
       searchTerm: String(searchTerm).trim(),
       count: cards.length,
       rfqs: cards.map((card) => ({

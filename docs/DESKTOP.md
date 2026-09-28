@@ -2,28 +2,78 @@
 
 ## 普通用户安装
 
-当前生成两种 0.6.1 本地测试安装包：
+0.7.6 使用内置 Chromium，提供两种本地测试安装包：
 
-- Apple Silicon macOS：`dist/desktop/RFQ-Assistant-0.6.1-mac-arm64.dmg`。
-- Windows x64：`dist/desktop/RFQ-Assistant-0.6.1-win-x64.exe`。
+- Apple Silicon macOS：`dist/desktop/RFQ-Assistant-0.7.6-mac-arm64.dmg`。
+- Windows x64：`dist/desktop/RFQ-Assistant-0.7.6-win-x64.exe`。
 
 Windows 双击 EXE 安装，无需管理员权限；会创建桌面与开始菜单快捷方式。
 本次在 Mac 交叉生成 Windows 安装包，已检查发布资源与 x64 图片处理
 模块，但未在 Windows 实机验证安装、浏览器控制、通知和退出行为。
 
 1. 打开 DMG，把「RFQ助手」拖入 Applications，再打开应用。
-2. 在「报价 Agent → 应用设置」填写模型名称和 API Key，保存后测试连接。
-   默认是智谱 GLM 的 OpenAI 兼容接口；也可使用 Anthropic 官方 API。
-3. 填写 GLM OCR Key。分析模型与 OCR 可使用同一智谱账号的 Key，应用
-   不会自动复制密钥到其他服务。也可选择「关闭图片识别」。
+2. 在左侧「设置」查看模型配置来源。默认使用已安装的本机 Claude CLI，
+   模型为 GLM 5.3；点击「测试模型连接」验证。没有 Claude CLI 时，
+   可选 GLM HTTP 请求，复用本机环境变量或手动填写 Key 和接口。
+   HTTP 模式支持 OpenAI / Anthropic 兼容接口及 Anthropic 官方 API。
+3. GLM OCR 默认复用智普模型 Key；需要单独计费账号时再填写 OCR Key。复用时
+   仅请求 Key 所属的智普 OCR 平台，不复用第三方模型 Key。也可选择「关闭图片识别」。
    报价前填写已人工核实的交货地点/装运港；监控间隔默认 600 秒。
-4. 按「首次使用：安装 Midscene 插件」加载随应用携带的官方插件。
-   Chrome 加载的是应用数据目录内稳定的文件夹，升级应用不会移走它。
-5. 在专用 Chrome 配置中登录 Alibaba、开启 Bridge，手动开启工作台
-   浏览器控制，再检测、扫描或持续监控。报价仍需逐单核对和确认。
+4. 在「报价 Agent」的运行准备区域点击「打开浏览器」，在应用自带的窗口中手动登录。
+   窗口顶部显示当前标签、后退、前进、地址和「复制链接」；左侧「浏览器」也提供导航、刷新和页面管理。
+   此会话与个人 Chrome 分开；也可在「浏览器」导入 Chrome 导出的 Alibaba 登录文件，
+   减少重复登录。迁移后仍要检查登录是否有效。
+5. 登录后打开 RFQ 列表，账号状态会自动检查并更新，无需开启 Agent；可点击「刷新状态」立即检查。
+   准备运行时开启「允许 Agent 操作浏览器」，再启动扫描或持续监控。
+   报价仍需逐单核对和确认；出现验证码或登录失效时先停止任务，再手动处理。
 
-无需安装 Node.js、npm、Python、Claude CLI 或编译工具。仍需联网、
-Chrome、模型账号/API 用量和 Alibaba 登录；应用不代替用户注册或授权。
+无需安装 Node.js、npm、Python 或编译工具；选用本机 Claude 时需已安装并配置 Claude CLI，HTTP 模式不需要。仍需联网、
+模型账号/API 用量和 Alibaba 登录。无需安装 Chrome 或浏览器插件；应用不代替用户注册或授权。
+仅从已有 Chrome 迁移登录时，可使用随项目提供的导出扩展。
+
+## 本机 Claude 与 HTTP 模型配置
+
+「自动」优先使用已安装的本机 Claude；若未安装且有 GLM 环境变量，使用 HTTP 请求。
+「使用 GLM 环境变量 HTTP 请求」强制使用本机 HTTP 配置；「手动选择调用方式」
+按界面指定的本机 Claude 或 HTTP 模式运行，不自动切换供应商。
+设置页显示来源、接口、模型名称和密钥变量名，不显示密钥。点击「重新读取本机环境变量」
+可在不重启应用的情况下刷新；现有任务运行时不允许修改配置。
+
+读取顺序：进程环境变量 → `~/.claude/settings.json` 中官方配置工具写入的 `env`
+→ macOS / Linux 标准登录 shell 的环境变量。Finder/Dock 启动也支持后两种来源。
+Windows 使用进程环境和本机 Claude env；修改系统环境后需重启应用。
+只读取模型认证和接口白名单，不加载 Claude 用户级 hooks、插件或额外指令，
+不导入自动提交权限或浏览器令牌，也不读取项目 `.env`。
+
+- 通用配置：`MODEL_API_KEY`、`MODEL_API_URL`、`MODEL_NAME`、`AGENT_PROVIDER`。
+- GLM 配置：`GLM_API_KEY` / `ZHIPU_API_KEY` / `ZHIPUAI_API_KEY` / `ZAI_API_KEY` / `ZAI_APIKEY`，
+  配合 `GLM_MODEL` 和 `GLM_BASE_URL` / `ZAI_BASE_URL`。
+- GLM Anthropic 兼容配置：`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL`、
+  `ANTHROPIC_MODEL` / `ANTHROPIC_HTTP_MODEL`。凭据与兼容接口成对使用。
+- OCR：优先使用界面单独保存的 OCR Key，其次是 `GLM_OCR_API_KEY`；未配置时复用已保存的智普模型 Key，或上述本机智普环境变量。也支持与官方智普接口成对配置的 `MODEL_API_KEY`、`ANTHROPIC_AUTH_TOKEN`。Z.AI Key 默认请求 `api.z.ai` 的 OCR 接口，国内智普 Key 默认请求 `open.bigmodel.cn`；自定义 OCR 地址必须与复用 Key 的平台一致。
+
+环境变量密钥仅留在主进程内存并交给应用内任务，不复制到设置文件。
+本机 Claude 模式由应用调用用户已安装的 Claude CLI；模型分析仍通过其配置的联网服务请求。
+设置页显示的模型名就是实际请求的模型，默认 `glm-5.3`。报价金额由固定规则计算，
+分析模型只处理需求理解和话术；浏览器回填及提交仍需逐单确认。
+本机 Claude 配置说明见 [智谱官方指南](https://docs.bigmodel.cn/cn/coding-plan/tool/claude)。
+
+## 从 Chrome 迁移 Alibaba 登录
+
+1. 在 RFQ 助手的「浏览器」展开导出工具说明，下载 ZIP 并解压。
+2. 在原 Chrome 打开 `chrome://extensions`，开启开发者模式，
+   选择「加载已解压的扩展程序」，选解压后的文件夹。
+3. 原 Chrome 确认 Alibaba 已登录，打开「RFQ助手 · Alibaba 登录导出」扩展，
+   点击导出，得到 `rfq-alibaba-login.json`。
+4. 回到 RFQ 助手「浏览器」，点击「选择登录文件并导入」。
+   导入后打开 RFQ 列表检查账号；失效或网站要求验证时，仍需手动登录。
+
+扩展源码随仓库和安装包提供，只申请 Alibaba 域名的 Cookie 权限，
+仅在点击按钮时导出，不发送到网络。文件含登录凭据，请妥善保管。
+导入只支持 Alibaba Cookie JSON，不导入整个 Chrome 配置目录、密码、历史或书签。
+文件先完整校验再替换应用专用会话；失败尝试恢复原记录，任务或页面加载中拒绝导入。
+忽略其他域名、过期记录及不支持的分区 Cookie；部分会话迁移后可能要求重新验证。
+导入不会开启 Agent、报价或自动提交权限。
 
 当前 macOS 包使用 ad-hoc 本地签名，尚未完成 Developer ID 签名和
 Apple 公证。Windows 包未完成发布者签名，系统可能拦截测试包。
@@ -42,6 +92,7 @@ RFQ 助手访问自己的钥匙串加密存储。请在系统弹窗完成授权�
 - 「导入已有数据」选择原项目的 `data` 文件夹，仅导入 `drafts`、
   `rfqs`、`runs`、`reference-materials`，不迁移旧操作权限和自动提交状态。
 - 密钥由 Electron `safeStorage` 使用系统加密保存，不回显给网页。
+  未配置密钥时打开工作台不查询钥匙串；实际保存密钥时才检查加密授权。
   系统密钥加密不可用时拒绝保存密钥；「清除已保存密钥」可移除它们。
 - 需求文本发送到用户选择的分析模型；GLM OCR 会把图片发送到所配置
   的 HTTPS 识别服务，按供应商用量计费。它不是离线 OCR。
@@ -51,8 +102,9 @@ RFQ 助手访问自己的钥匙串加密存储。请在系统弹窗完成授权�
 ## 运行、通知和退出
 
 关闭窗口后仍在菜单栏托盘运行。点击托盘可重开工作台；菜单中的
-「退出并停止任务」或 ⌘Q 会停止应用创建的任务，不关闭用户 Chrome。
-应用退出、监听 Chrome 关闭或电脑休眠后无法持续监听。
+「退出并停止任务」或 ⌘Q 会停止应用创建的任务并结束内置浏览器。
+内置浏览器的关闭按钮只隐藏窗口，可以从工作台/托盘/应用菜单重新打开。
+应用退出或电脑休眠后无法持续监听；个人 Chrome 不受影响。
 
 机会通知默认关闭，只提示人工复核，不自动报价。桌面版使用 Electron
 原生通知，权限归「RFQ 助手」；macOS 要求代码签名。测试按钮
@@ -67,6 +119,7 @@ RFQ 助手访问自己的钥匙串加密存储。请在系统弹窗完成授权�
 ```bash
 npm ci
 npm run desktop:dev
+npm run desktop:test:browser
 npm run desktop:dist
 npm run desktop:dist:win
 npm run desktop:check
@@ -83,6 +136,10 @@ Electron 44 的 npm 包需要显式运行安装器，脚本已自动处理。开
 入口：`desktop/main.js`；服务：`desktop/server.js`；任务控制：
 `desktop/console.js`；真实前端源码：`frontend/src/`。旧 Python 服务
 保留为兼容参考，默认 Web 和桌面启动均不使用它。
+
+内置浏览器由 `desktop/embedded-browser.js` 管理，工作进程经临时私有令牌
+连接 `src/electron-browser.js`，不开放 Chromium 调试端口，不向工作台网页
+提供任意脚本执行权限。详细接口、边界和验证见 [内置浏览器说明](EMBEDDED-BROWSER.md)。
 
 签名发布时将 `electron-builder.yml` 的 `mac.identity: '-'` 换为配置
 好的 Developer ID 签名设置，再启用公证；Windows 设置发布者签名。

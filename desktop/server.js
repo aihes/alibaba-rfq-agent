@@ -18,13 +18,14 @@ function contained(file, directory) {
  * 操作。所有证据文件由 catalog 白名单选取，客户端不能指定绝对路径。
  */
 export async function createCaseServer(options) {
-  const { resources, workspace, port = 0, desktopSettings, importData, notify, notifyToken, toolToken } = options;
+  const { resources, workspace, port = 0, desktopSettings, importData, importBrowserLogin, testLocalClaude, notify, notifyToken, toolToken, embeddedBrowser, browserToken } = options;
   const console = new OperatorConsole(options);
   const tools = createNotificationTools({ workspace, file: console.settingsFile,
     ...(notify ? { send: notify } : {}) });
   const extension = new BrowserExtension(resources, workspace);
   let extensionError = null;
-  try { extension.prepare(); } catch (error) { extensionError = error.message; }
+  // 桌面内置浏览器不加载扩展；仅 Web 兼容模式准备 Chrome Bridge 文件。
+  if (!embeddedBrowser) try { extension.prepare(); } catch (error) { extensionError = error.message; }
   const catalogFile = path.join(workspace, "data/case-catalog/cases.json");
   let catalog, mtime;
   const getCatalog = () => {
@@ -50,7 +51,11 @@ export async function createCaseServer(options) {
       if (req.method === "POST") {
         const native = route === "/api/desktop/notify" && notifyToken && req.headers["x-rfq-notify"] === notifyToken;
         const tool = route === "/api/tools/notifications" && toolToken && req.headers["x-rfq-tool"] === toolToken;
-        if (!native && !tool && (!new Set([...hosts].map((host) => `http://${host}`)).has(req.headers.origin) || req.headers["x-case-console"] !== "1")) return fail(403, "操作请求来源无效");
+        const browser = route === "/api/desktop/browser/command" && browserToken && req.headers["x-rfq-browser"] === browserToken;
+        // 工作台网页不能凭 Origin + 控制台头获得 CDP。专用令牌只在进程
+        // 环境中分发，不返回给 renderer，也不能用于设置/通知/其他路由。
+        if (route === "/api/desktop/browser/command" && !browser) return fail(403, "内置浏览器任务授权无效");
+        if (!native && !tool && !browser && (!new Set([...hosts].map((host) => `http://${host}`)).has(req.headers.origin) || req.headers["x-case-console"] !== "1")) return fail(403, "操作请求来源无效");
         if (req.headers["content-type"]?.split(";")[0] !== "application/json") return fail(415, "仅接受 JSON 请求");
         const length = Number(req.headers["content-length"]);
         if (!Number.isInteger(length) || length <= 0 || length > 16384) return fail(413, "请求过大或为空");
@@ -60,7 +65,20 @@ export async function createCaseServer(options) {
         if (!payload || typeof payload !== "object" || Array.isArray(payload)) return fail(400, "请求格式无效");
         const empty = () => { if (Object.keys(payload).length) throw new Error("此操作不接受额外参数"); };
         let result;
-        if (native) {
+        if (browser && embeddedBrowser) result = await embeddedBrowser.command(payload);
+        else if (route === "/api/desktop/browser/open" && embeddedBrowser) {
+          if (Object.keys(payload).some((key) => key !== "url") || ("url" in payload && typeof payload.url !== "string")) throw new Error("浏览器打开参数无效");
+          if (payload.url) console.assertIdle();
+          result = await embeddedBrowser.open(payload.url);
+        } else if (route === "/api/desktop/browser/navigate" && embeddedBrowser) {
+          if (Object.keys(payload).some((key) => !["action", "url"].includes(key)) || typeof payload.action !== "string" || ("url" in payload && (payload.action !== "navigate" || typeof payload.url !== "string"))) throw new Error("浏览器导航参数无效");
+          if (payload.action !== "hide") console.assertIdle();
+          result = await embeddedBrowser.manual(payload);
+        } else if (route === "/api/desktop/browser/inspect" && embeddedBrowser) {
+          empty(); console.assertIdle(); result = await embeddedBrowser.inspect();
+        } else if (route === "/api/desktop/browser/import" && importBrowserLogin) {
+          empty(); console.assertIdle(); result = await importBrowserLogin(console);
+        } else if (native) {
           if (!console.settings.notificationsEnabled) result = { status: "disabled", detail: "机会系统通知已关闭" };
           else result = await notify(payload);
         } else if (route === "/api/tools/notifications") {
@@ -74,15 +92,33 @@ export async function createCaseServer(options) {
         else if (route === "/api/extension/prepare") { empty(); result = extension.prepare(); extensionError = null; }
         else if (route === "/api/desktop/settings" && desktopSettings) {
           console.assertIdle(); result = desktopSettings.save(payload);
+        } else if (route === "/api/desktop/settings/environment" && desktopSettings) {
+          empty(); console.assertIdle(); result = await desktopSettings.refreshEnvironment();
         } else if (route === "/api/desktop/model/test" && desktopSettings) {
           empty(); console.assertIdle();
           const { callModelHttp } = await import("../src/model-http.js");
-          const v = desktopSettings.value;
-          const data = v.agentProvider === "anthropic-http"
-            ? await (await import("../src/claude.js")).callAnthropicHttp({ anthropicApiKey: v.modelApiKey, anthropicModel: v.modelName }, "Return JSON only: {\"ok\":true}", { test: true }, 64)
-            : await callModelHttp({ modelApiKey: v.modelApiKey, modelApiUrl: v.modelApiUrl, modelName: v.modelName }, "Return JSON only: {\"ok\":true}", { test: true }, 64);
+          const v = desktopSettings.resolved().value;
+          let data;
+          if (v.agentProvider === "local-claude-sdk") {
+            const env = desktopSettings.environment();
+            if (!env.LOCAL_CLAUDE_EXECUTABLE) throw new Error("未找到本机 Claude，请安装或切换 GLM HTTP");
+            if (testLocalClaude) data = await testLocalClaude(env);
+            else {
+              const { runLocalAgentJson } = await import("../src/local-agent.js");
+              const sdk = await runLocalAgentJson({ localClaudeExecutable: env.LOCAL_CLAUDE_EXECUTABLE,
+                localClaudeModel: env.LOCAL_CLAUDE_MODEL, localClaudeSettingSources: [],
+                localClaudeStructuredOutput: false, localClaudeTimeoutMs: 120000, localClaudeMaxBudgetUsd: 0.05,
+                localClaudeEnvironment: Object.fromEntries(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]
+                  .filter(key => env[key]).map(key => [key, env[key]])) },
+              { prompt: 'Return exactly this JSON object and nothing else: {"ok":true}',
+                schema: { type: "object", additionalProperties: false, required: ["ok"], properties: { ok: { type: "boolean" } } } });
+              data = sdk.data;
+            }
+          } else if (v.agentProvider === "anthropic-http") data = await (await import("../src/claude.js"))
+            .callAnthropicHttp({ anthropicApiKey: v.modelApiKey, anthropicModel: v.modelName, anthropicApiUrl: v.modelApiUrl }, "Return JSON only: {\"ok\":true}", { test: true }, 256);
+          else data = await callModelHttp({ modelApiKey: v.modelApiKey, modelApiUrl: v.modelApiUrl, modelName: v.modelName }, "Return JSON only: {\"ok\":true}", { test: true }, 256);
           if (data.ok !== true) throw new Error("模型返回格式不符合要求");
-          result = { ok: true, detail: "模型连接成功；测试仅发送固定文本，会产生少量 API 用量" };
+          result = { ok: true, detail: "模型连接成功；测试仅发送固定文本，会产生少量模型用量" };
         } else if (route === "/api/desktop/import" && importData) { empty(); console.assertIdle(); result = await importData(console); }
         else return fail(404, "操作不存在");
         return reply(200, result);
@@ -93,7 +129,14 @@ export async function createCaseServer(options) {
         return reply(200, fs.readFileSync(file), mime[path.extname(file)]);
       }
       if (route === "/api/desktop/info") return reply(200, { desktop: Boolean(desktopSettings), workspace,
-        platform: process.platform, extensionError, ...(desktopSettings ? { settings: desktopSettings.info() } : {}) });
+        platform: process.platform, version: JSON.parse(fs.readFileSync(path.join(resources, "package.json"), "utf8")).version,
+        runtime: { node: process.versions.node, electron: process.versions.electron || null, chromium: process.versions.chrome || null },
+        extensionError, browserProvider: embeddedBrowser ? "electron-cdp" : "chrome-bridge", ...(desktopSettings ? { settings: desktopSettings.info() } : {}) });
+      if (route === "/api/desktop/browser" && embeddedBrowser) return reply(200, await console.browserStatus());
+      if (route === "/api/desktop/browser/export-tool" && embeddedBrowser) {
+        const zip = new AdmZip(); zip.addLocalFolder(path.join(resources, "plugins/alibaba-login-export"));
+        return reply(200, zip.toBuffer(), "application/zip", "RFQ-Alibaba-Login-Export.zip");
+      }
       if (route === "/api/tools/notifications") return reply(200, { tools: tools.definitions, ...tools.status() });
       if (route === "/api/catalog") return reply(200, getCatalog());
       if (route === "/api/ops/status") return reply(200, console.snapshot());

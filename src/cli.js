@@ -37,9 +37,9 @@ async function main() {
         console.log(JSON.stringify({ started, ...(await runCycle(config)) }, null, 2));
       } catch (error) {
         console.error(JSON.stringify({ started, error: error.message }));
-        const requiresHuman = /CAPTCHA|verification challenge|login is required|Cannot attach to the existing Chrome session through Chrome Bridge/i.test(error.message);
+        const requiresHuman = /CAPTCHA|verification challenge|login is required|Cannot attach to the existing Chrome session through Chrome Bridge|内置浏览器|页面操作失败/i.test(error.message);
         if (requiresHuman) {
-          console.error(JSON.stringify({ stopped: true, reason: "Chrome Bridge or Alibaba requires human attention" }));
+          console.error(JSON.stringify({ stopped: true, reason: "Browser connection or Alibaba requires human attention" }));
           process.exitCode = 1;
           return;
         }

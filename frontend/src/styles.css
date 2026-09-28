@@ -158,3 +158,55 @@
 .data-import-row button { flex-shrink: 0; }
 #desktop-data-path { overflow-wrap: anywhere; }
 @media (max-width: 650px) { .model-settings-form { grid-template-columns: 1fr; } .data-import-row { align-items: flex-start; flex-direction: column; } .desktop-setup { padding: 16px; } }
+
+/* 工作区拥有独立页面；环境清单横跨 Agent 区，避免详细状态挤在窄列。 */
+.agent-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.environment-card{grid-column:1/-1}
+.console-settings-link{font-size:12px;color:var(--muted);line-height:1.7;margin:0 0 20px}
+.tool-workspace{margin-top:30px}
+.tool-intro{font-size:14px;line-height:1.7;color:var(--muted);margin:0 0 24px;max-width:800px}
+.settings-sheet,.browser-overview{border:1px solid var(--line);background:var(--sheet);padding:26px;margin-bottom:20px;min-width:0}
+.settings-sheet h3,.browser-overview h3{font-family:"Songti SC",Georgia,serif;font-size:23px;margin:0 0 12px}
+.settings-index{display:flex;flex-wrap:wrap;gap:20px;border-bottom:1px solid var(--line);padding:0 0 17px;margin-bottom:24px}
+.settings-index a{font-size:12px;color:var(--dark2);text-underline-offset:5px}
+.settings-group{border:0;border-top:1px solid var(--line);padding:20px 0 6px;margin:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;min-width:0}
+.settings-group legend{color:var(--accent);font-size:12px;font-weight:700;padding-right:14px}
+.browser-overview-head{display:flex;justify-content:space-between;align-items:center;gap:20px;padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:16px}
+.browser-overview-head h3{margin-top:10px;overflow-wrap:anywhere;font-size:25px}
+.browser-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px;margin:0}
+.browser-facts>div{padding:13px 0;border-bottom:1px solid var(--line);min-width:0}
+.browser-facts dt{font-size:11px;color:var(--muted);margin-bottom:7px}
+.browser-facts dd{font-size:13px;margin:0;line-height:1.6;overflow-wrap:anywhere}
+.browser-navigation-actions{display:flex;gap:9px;flex-wrap:wrap;margin:17px 0}
+.browser-navigation button,.browser-inspection button{border:1px solid var(--dark2);background:transparent;color:var(--dark2);padding:9px 13px;font-size:12px}
+.browser-navigation button:hover:enabled,.browser-inspection button:hover:enabled{background:#e9eee7}
+.browser-navigation button:disabled,.browser-inspection button:disabled{opacity:.4;cursor:not-allowed}
+.browser-address label{font-size:12px;color:var(--muted);display:block;margin-bottom:8px}
+.browser-address>div{display:flex;gap:10px}
+.browser-address input{width:100%;min-width:0;flex:1;border:1px solid var(--line);padding:10px 12px;font:inherit;font-size:13px;background:#fff;color:var(--ink)}
+.browser-address button{white-space:nowrap}
+#embedded-browser-setup{margin:0 0 20px;padding:22px 26px;background:#e9eee7;border:1px solid var(--line)}
+#embedded-browser-setup>.extension-steps{max-width:760px}
+#embedded-browser-setup .extension-actions button{font-size:12px;padding:10px 14px}
+.browser-inspection .section-heading{align-items:center;padding:0;border:0;margin-bottom:12px}
+.browser-inspection .section-heading h3{margin:0}
+.browser-capabilities dl{margin:0}
+.browser-capabilities dl>div{display:grid;grid-template-columns:95px minmax(0,1fr);gap:18px;border-top:1px solid var(--line);padding:16px 0}
+.browser-capabilities dt{font-size:12px;font-weight:650;color:var(--dark)}
+.browser-capabilities dd{font-size:13px;line-height:1.7;color:var(--muted);margin:0}
+.env-checks{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 26px}
+.env-row>div{flex:1;min-width:0}
+.env-row-heading{display:flex;justify-content:space-between;gap:14px;align-items:baseline}
+.env-state{font-size:10px;color:var(--muted);white-space:nowrap}
+.env-row p{font-size:11px;line-height:1.6;color:var(--muted);margin:8px 0}
+.env-row .text-button{margin-top:8px}
+.env-configuration{margin-top:16px;padding-top:8px;border-top:1px solid var(--line)}
+.env-diagnostics{margin-top:18px;color:var(--muted);font-size:12px}
+.env-diagnostics summary{cursor:pointer;line-height:1.8}
+.env-diagnostics[open] summary{margin-bottom:10px}
+.env-buttons{display:flex;gap:10px;flex-wrap:wrap}
+.env-buttons #env-browser-action{background:var(--dark2);color:#fff}
+.env-actions button:disabled{opacity:.45;cursor:not-allowed}
+@media(max-width:520px){.env-actions{align-items:flex-start;flex-direction:column}.env-actions small{text-align:left}}
+@media(max-width:820px){.workspace-nav{flex-wrap:wrap}.agent-grid{grid-template-columns:1fr}.env-checks{grid-template-columns:1fr}.settings-sheet,.browser-overview{padding:22px}.browser-facts{gap:0 16px}}
+@media(max-width:520px){.workspace-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}.workspace-nav button{justify-content:space-between;min-width:0}.settings-sheet,.browser-overview{padding:20px 16px}.settings-group,.browser-facts{grid-template-columns:1fr}.browser-overview-head{align-items:flex-start}.browser-address>div{flex-direction:column}.browser-inspection .section-heading{align-items:flex-start;gap:14px;flex-direction:column}.browser-capabilities dl>div{grid-template-columns:1fr;gap:8px}#embedded-browser-setup{padding:20px 16px}}

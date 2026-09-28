@@ -1,18 +1,18 @@
 # Alibaba RFQ Agent
 
-> 复用用户已经登录的 Chrome，持续发现 Alibaba RFQ；由本地 Agent 理解需求，由确定性规则决定金额，并把浏览器事实、Agent 判断、报价依据和外部动作保存成可审计证据。
+> 桌面版使用应用自带的 Chromium，持续发现 Alibaba RFQ；由 Agent 理解需求，由确定性规则决定金额，并把浏览器事实、Agent 判断、报价依据和外部动作保存成可审计证据。
 
 **当前状态：**已有 Electron 桌面测试版（macOS Apple Silicon / Windows x64）；Mac 为 ad-hoc 本地签名、未公证，Windows 未签名且未实机验证。浏览器报价仍逐单确认，默认只生成草稿。原有 CLI 继续保留。
 
-- 浏览器：现有 Chrome + Midscene Chrome Bridge，不创建第二个 Chrome Profile。
-- 理解：桌面版在页面配置模型 API，无需 Claude CLI；开发者可继续使用本地 Claude Agent SDK。
+- 浏览器：桌面版使用独立会话的内置 Chromium + 原生 CDP，窗口顶部显示当前标签和可复制的链接；开发者 Web/CLI 版保留现有 Chrome + Midscene Bridge。
+- 理解：桌面版优先调用用户本机 Claude，默认模型为 GLM 5.3；也可在设置中选择 GLM / Anthropic 兼容 HTTP 接口。
 - 定价：金额只来自版本化规则，Agent 不得自由猜价。
 - 图片：使用 GLM OCR 云接口，RFQ 图片发送到所配置服务；无需本机编译，支持关闭 OCR。
 - 提交：只有页面成功状态得到验证且落盘状态为 `submitted`，才计为成功报价。
 
 ## 普通用户：桌面应用
 
-Mac 打开 `dist/desktop/RFQ-Assistant-0.6.1-mac-arm64.dmg`；Windows 双击 `dist/desktop/RFQ-Assistant-0.6.1-win-x64.exe`，安装「RFQ助手」。首次进入应用设置填写模型与 GLM OCR 密钥，再按引导安装随附插件、登录 Alibaba。无需 Node、Python 或终端。
+Mac 打开 `dist/desktop/RFQ-Assistant-0.7.6-mac-arm64.dmg`；Windows 双击 `dist/desktop/RFQ-Assistant-0.7.6-win-x64.exe`，安装「RFQ助手」。左侧「设置」默认使用本机 Claude 和 GLM 5.3；没有 Claude 时可选 HTTP 模式并复用本机 GLM 环境变量。GLM OCR 默认共用已保存或本机环境变量中的智普 Key，也可单独填写 OCR Key。在「报价 Agent」打开浏览器手动登录，也可在「浏览器」使用随包导出工具迁移 Chrome 的 Alibaba 登录。账号状态自动更新，准备运行时再开启 Agent 操作权限。正常使用无需安装 Chrome、插件、Node、Python 或终端；本机 Claude 模式需要用户已安装并配置 Claude CLI。
 
 关闭窗口继续后台运行；菜单「退出并停止任务」才退出。已有真实 CASE 可通过「导入已有数据」选择原项目 `data` 迁移，私人数据不会打进安装包。当前为本地测试版，对外分发前需完成正式签名与公证。详细步骤见 [桌面版说明](docs/DESKTOP.md)。
 
@@ -32,7 +32,7 @@ npm start
 
 如果提示「端口 8888 已被占用」，可能已经启动过：先打开上述地址检查；需要重启时回原启动终端按 Ctrl+C 后再启动。服务不会自动换成难记的随机端口。高级用户可用 `npm run cases:serve -- --port 8889` 指定其他端口。
 
-### 首次使用：在本项目安装 Midscene 插件
+### Web/CLI 首次使用：在本项目安装 Midscene 插件
 
 官方插件 ZIP 已随项目放在 [`vendor/midscene/`](vendor/midscene/README.md)，对应锁定的 SDK 发布版本 v1.12.9。`npm start` 会校验并解压到固定本地目录，无需另行下载插件。
 
@@ -40,13 +40,15 @@ npm start
 2. 将 `chrome://extensions` 复制到 Chrome 地址栏打开，开启右上角「开发者模式」，点击「加载已解压的扩展程序」，选择刚才的目录。
    Mac 选择文件夹时按 **⌘⇧G**，粘贴插件目录并回车，再点击「选择」。
 3. 在 Chrome 右上角拼图菜单固定并打开 **Midscene.js**，进入 **Bridge Mode**。
-4. 开启工作台「允许 Agent 控制浏览器」并重新检测，在插件询问连接时点击 **Allow**，确认 Alibaba 已登录。
+4. 开启工作台「允许 Agent 操作浏览器」并重新检测，在插件询问连接时点击 **Allow**，确认 Alibaba 已登录。
 
 Chrome 最后一步加载扩展需手动操作；准备文件不会代替安装或开启浏览器控制。页面也提供官方 ZIP 下载和「准备安装文件」重试入口。安装后保留项目中的 `data/browser-extension/`，Chrome 会持续读取该目录。浏览数据集无需安装插件。
 
 ### 日常办公与监听分开
 
-Agent 会切换并导航 Alibaba 标签页，因此不要把运行它的窗口同时用于日常办公。建议按以下方式使用：
+桌面版自动使用应用自己的阿里巴巴窗口和持久会话，不连接个人 Chrome。窗口顶部显示当前标签、后退、前进、地址栏和「复制链接」；没有历史页面时导航按钮禁用，登录页链接不显示敏感参数，也不能复制。关闭内置窗口只是隐藏，任务仍能运行；菜单「退出并停止任务」才结束浏览器和任务。遇到登录或验证码，在应用内窗口手动处理。架构与验证范围见 [内置浏览器说明](docs/EMBEDDED-BROWSER.md)。
+
+Web/CLI 的 Agent 会切换并导航 Alibaba 标签页，建议按以下方式使用：
 
 1. **日常浏览器**：继续办公，也可用它访问本机工作台。
 2. **专用 Chrome 配置**：由用户在 Chrome 头像菜单添加一个名为「RFQ 监听」的配置，在这个配置中安装 Midscene、登录 Alibaba 并开启 Bridge Mode。
@@ -94,7 +96,7 @@ Agent 会切换并导航 Alibaba 标签页，因此不要把运行它的窗口�
 
 ```mermaid
 flowchart LR
-  A[六类关键词轮询] --> B[连接已登录的 Chrome]
+  A[六类关键词轮询] --> B[连接内置 Chromium / 开发者 Chrome Bridge]
   B --> C[读取列表、详情和产品图]
   C --> D[本地 OCR]
   D --> E[Agent 分类、抽取规格和风险]
@@ -135,7 +137,7 @@ RFQ 文本、图片和 OCR 内容一律视为不可信输入。二维码、外�
 
 现有价格只是 PoC 场景的版本化规则，不是通用商品价目表。更换供应商、材料、工艺或币种时，必须重新验证并更新规则版本。
 
-## 快速开始
+## 开发者 CLI 快速开始
 
 ### 前置条件
 
@@ -144,7 +146,7 @@ RFQ 文本、图片和 OCR 内容一律视为不可信输入。二维码、外�
 - 已安装并启用的 Midscene Chrome Bridge 扩展
 - Chrome 中已有登录状态正常的 `sourcing.alibaba.com` 或 `rfqposting.alibaba.com` 标签页
 - 已安装并完成配置的 Claude Code
-- GLM OCR API Key（图片识别可关闭；无需本机 Vision 编译工具）
+- 智普模型 Key 或单独的 GLM OCR API Key（图片识别可关闭；无需本机 Vision 编译工具）
 
 ### 安装与自检
 
@@ -170,7 +172,7 @@ npm run midscene:status
 - `connected: true`
 - `loggedIn: true`
 
-开发者使用本地 Claude 路径时无需把分析模型 API Key 写进项目。GLM OCR 需单独配置密钥，图片会发送到智谱。`AGENT_PROVIDER=local-claude-sdk` 会启动 `PATH` 中的 `claude`，并继承当前 shell 已有的网关、认证和模型配置。`LOCAL_CLAUDE_MODEL` 留空时继承本地默认模型。
+开发者使用本地 Claude 路径时无需把分析模型 API Key 写进项目。GLM OCR 默认复用智普模型 Key；如需不同密钥，可设置 `GLM_OCR_API_KEY`。图片会发送到所选智普 OCR 服务。`AGENT_PROVIDER=local-claude-sdk` 会启动 `PATH` 中的 `claude`，并继承当前 shell 已有的网关、认证和模型配置。`LOCAL_CLAUDE_MODEL` 留空时继承本地默认模型。
 
 在任何表单回填前，必须在 `.env` 设置经过核实的 `QUOTE_PORT`：EXW 填工厂交货城市/地点，FOB 填装运港。程序不会猜这个值。
 
@@ -199,7 +201,7 @@ npm run watch
 node scripts/run-one-hour-audit.mjs --duration-seconds 3600
 ```
 
-Chrome Bridge 断开、登录失效或出现 CAPTCHA / 安全验证时，持续任务会停止并保留现有证据，不会绕过验证或无限重试。
+内置浏览器连接失效、Chrome Bridge 断开、登录失效或出现 CAPTCHA / 安全验证时，持续任务会停止并保留现有证据，不会绕过验证或无限重试。
 
 ### 回填但不提交
 
@@ -285,7 +287,7 @@ data/
 
 ## 本地数据集与报价 Agent 控制台
 
-仓库中的真实 RFQ 草稿与 `data/reference-materials/` 人工报价表可以整理为统一 CASE。生成数据并启动只监听本机的页面（本地控制台服务本身是 Python 标准库实现，无需 pip 安装任何依赖）：
+仓库中的真实 RFQ 草稿与 `data/reference-materials/` 人工报价表可以整理为统一 CASE。生成数据并启动只监听本机的页面（本地控制台服务使用项目内 Node 运行环境）：
 
 ```bash
 npm start              # 整理数据并启动，访问 http://localhost:8888/
@@ -294,13 +296,15 @@ npm start              # 整理数据并启动，访问 http://localhost:8888/
 
 打开 `http://localhost:8888/`。**数据集管理**视图按来源、品类和价格筛选真实需求与报价样例，检索商品或 CASE ID，逐条查看当时的买家需求、报价过程、规格、规则判断、成本线索及原始工作簿。当前 201 个 CASE 中有 108 个客户报价单 CASE、189 行报价明细，另含 Agent 分析和工作材料；并非每个 CASE 都有真实报价。这些记录为后续案例检索与学习准备语料，当前未接入 Agent 的检索流程。结构化结果写在 `data/case-catalog/cases.json`，仍由 `.gitignore` 排除；原始表格通过本机页面下载，服务不会监听公网地址。
 
+左侧独立的 **设置** 页面集中管理模型、OCR、报价与监控、数据导入和应用版本。**浏览器** 页面展示实时窗口 / 页面 / 会话 / CDP / 任务占用状态，提供打开、后退、前进、刷新和显式只读登录检测。内置窗口顶部显示单个标签、当前链接与复制按钮；目前未提供多标签、书签或扩展安装。
+
 **报价 Agent** 视图分三块控制：
 
-- **环境检测**：进入页面自动检查 Node.js 与 Midscene 插件；只有浏览器总开关开启且没有运行任务时才连接 Bridge、检查登录态。强制重检也遵守这两个限制；检测占用浏览器期间不能启动新任务，关闭总开关会终止检测进程。结果缓存 20 秒，授权变化时失效。
+- **运行准备**：桌面版自动显示窗口和 Alibaba 账号状态，无需开启 Agent 权限；界面每 2 秒更新，同一页面最多每 10 秒只读检查登录提示。任务运行时暂停检查，导航后旧结果失效，支持主动刷新。运行环境细节折叠显示。Web 版连接 Chrome Bridge 仍须先开启浏览器总开关，检测进程与任务互斥，缓存 20 秒。
 - **RFQ 扫描**：可选单个配置品类或「全部配置品类」，执行只扫描、运行一轮分析或持续监控。“全部”显式使用 `config/default.json` 中的完整列表，覆盖 shell 和 `.env` 中的 `SEARCH_TERMS` 子集。全品类扫描逐项执行，任一项失败立即停止并保留退出码。分析任务结束后自动更新数据集。
 - **报价模式**：「仅生成报价话术」（默认）或「逐单浏览器报价」。后者同时开启浏览器控制，仅开放下方工作台；每次回填和提交仍需选择具体草稿并确认。扫描与监控不因模式切换而自动报价。服务重启后回落到仅话术模式。
 
-「允许 Agent 控制浏览器」是总开关，首次使用默认关闭，后续记住用户选择；关闭时禁止连接、扫描和报价，运行中关闭会停止任务。同一时间只运行一个任务，可在页面停止。状态和最近日志显示在页面，完整运行日志与设置保存在 `data/case-catalog/ops/`。异常提醒是页面内提示，不会向外部发送消息。
+「允许 Agent 操作浏览器」是总开关，首次使用默认关闭，后续记住用户选择；关闭时禁止 Agent 连接、扫描和报价，运行中关闭会停止任务。浏览器页的显式只读登录检测仍可使用，不建立任务控制权限。同一时间只运行一个任务，可在页面停止。状态和最近日志显示在页面，完整运行日志与设置保存在 `data/case-catalog/ops/`。异常提醒是页面内提示，不会向外部发送消息。
 
 扫描与分析进程强制使用 `AUTO_CONTACT_MODE=off` 和 `ALLOW_LIVE_SUBMIT=false`，因此只生成本地草稿。若要控制浏览器进行报价，先把报价模式切换为「逐单浏览器报价」，再选择具体草稿审阅 RFQ、数量、单价、总价、交货地点和买家留言。只有确定性规则价且通过现有报价策略的草稿可回填；回填后须核对浏览器字段与截图，才能在页面输入该 RFQ ID 并逐单确认提交。草稿变化会使先前审阅失效。报价模式在服务重启后自动回落为仅话术；当前 66 个草稿没有满足规则的可报价项。控制台仅接受本机同源请求和预设动作，不提供任意命令执行。
 

@@ -4,11 +4,45 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
 const fmt = (value, maximumFractionDigits = 3) => value == null ? '—' : new Intl.NumberFormat('en-US', { maximumFractionDigits }).format(value);
 const label = (item) => item.sourceType === 'agent_run' ? 'AGENT / RFQ' : item.quotes.length ? 'MANUAL / PI' : 'MANUAL / FILE';
 const statusClass = (item) => item.status === 'customer_quote_document' || item.status === 'conditional_quote' ? 'orange' : item.status === 'working_material_only' ? 'gray' : '';
-const safeAlibabaUrl = (value) => { try { const url = new URL(value); return url.protocol === 'https:' && ['sourcing.alibaba.com', 'rfqposting.alibaba.com'].includes(url.hostname) ? url.href : null; } catch { return null; } };
+const safeAlibabaUrl = (value) => { try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && !url.port && ['sourcing.alibaba.com', 'rfqposting.alibaba.com'].includes(url.hostname) ? url.href : null; } catch { return null; } };
 let desktopInfo = null;
-const keepRunning = () => desktopInfo?.desktop ? '关闭窗口仍可通知；请保持 RFQ 助手、监听 Chrome 和监控任务运行。电脑休眠期间无法监听。' : '关闭工作台页面仍可通知；请保持终端、监听 Chrome 和持续监控任务运行。';
+state.browser = null; state.browserLoading = false; state.browserAction = false; state.env = null;
+const keepRunning = () => desktopInfo?.desktop ? '关闭窗口仍可通知；请保持 RFQ 助手和监控任务运行。内置浏览器会保留在后台，电脑休眠期间无法监听。' : '关闭工作台页面仍可通知；请保持终端、监听 Chrome 和持续监控任务运行。';
+
+function renderBrowserSetup() {
+  const embedded = desktopInfo?.browserProvider === 'electron-cdp';
+  $('#embedded-browser-setup').hidden = !embedded;
+  $('#extension-setup').hidden = embedded;
+  $('#browser-desktop-controls').hidden = !embedded;
+  $('#browser-web-help').hidden = embedded;
+  $('#settings-web-help').hidden = desktopInfo?.desktop === true;
+  $('.settings-index').hidden = desktopInfo?.desktop !== true;
+  if (!desktopInfo?.desktop) $('#settings-runtime').innerHTML = '<div><dt>运行方式</dt><dd>本机 Web / CLI 服务</dd></div>';
+  if (embedded) {
+    $('#browser-isolation').textContent = '打开应用内的浏览器并登录 Alibaba，状态会自动更新。准备扫描时再开启下方 Agent 操作权限。';
+    $('#browser-control-help').textContent = '开启后才允许扫描和报价操作；关闭会停止浏览器任务。手动浏览和登录状态检查始终可用。';
+    $('#env-heading').textContent = '运行准备';
+    $('#env-recheck').textContent = '刷新状态';
+    $('#env-browser-action').hidden = false;
+  }
+}
+
+async function openEmbeddedBrowser(url) {
+  if (state.browserAction) return;
+  state.browserAction = true; renderOps(); renderEnv();
+  const status = $('#embedded-browser-status');
+  status.textContent = '正在打开阿里巴巴窗口…';
+  try {
+    state.browser = await opsRequest('/api/desktop/browser/open', url ? { url } : {});
+    renderBrowser();
+    status.textContent = '浏览器已打开。手动登录后，工作台会自动更新状态。';
+  } catch (error) { status.textContent = error.message; state.opsFlash = error.message; }
+  finally { state.browserAction = false; await loadBrowser(); renderOps(); }
+}
 
 function renderModelSettings(settings) {
+  if (desktopInfo) desktopInfo.settings = settings;
+  $('#model-config-source').value = settings.modelConfigSource || 'auto';
   $('#model-provider').value = settings.agentProvider;
   $('#model-name').value = settings.modelName;
   $('#model-api-url').value = settings.modelApiUrl;
@@ -17,7 +51,28 @@ function renderModelSettings(settings) {
   $('#quote-port').value = settings.quotePort || '';
   $('#poll-interval').value = settings.pollIntervalSeconds || '600';
   $('#model-api-key').value = ''; $('#ocr-api-key').value = '';
-  $('#model-settings-status').textContent = `模型密钥${settings.modelKeyConfigured ? '已保存' : '未配置'} · OCR 密钥${settings.ocrKeyConfigured ? '已保存' : '未配置'}${settings.encryptedStorage ? ' · 本机加密保存' : ' · 系统密钥加密当前不可用'}`;
+  $('#model-environment-status').textContent = settings.environmentError || (settings.agentProvider === 'local-claude-sdk'
+    ? settings.claudeExecutableAvailable ? '本机 Claude 已找到；使用本机 GLM 认证变量，不加载 Claude 用户级插件或 hooks。' : '尚未找到本机 Claude。可安装 Claude，或选择 GLM HTTP 接口。'
+    : settings.environmentModelAvailable
+      ? `检测到 ${settings.environmentSource} · ${settings.environmentKeyVariable}。${settings.effectiveModelSource === 'environment' ? '当前正在使用，密钥仅留在内存中。' : '当前优先使用手动保存的配置。'}`
+      : '未检测到可用模型环境变量；可以重新读取或选择手动填写。');
+  $('#model-settings-status').textContent = `${settings.agentProvider === 'local-claude-sdk' ? settings.claudeExecutableAvailable ? '本机 Claude 已找到，请测试连接' : '本机 Claude 尚未找到' : `模型${settings.modelKeyConfigured ? settings.effectiveModelSource === 'environment' ? '使用本机环境变量' : '密钥已保存' : '未配置'}`} · OCR 密钥${settings.ocrKeyConfigured ? '可用' : '未配置'}${settings.encryptedStorage === true ? ' · 已保存密钥在本机加密' : settings.encryptedStorage === false ? ' · 系统密钥加密当前不可用' : ''}`;
+  const ocrSource = {
+    'saved-ocr': '使用单独保存的 OCR Key', 'environment-ocr': '使用本机 GLM_OCR_API_KEY',
+    'saved-model': '复用已保存的智普模型 Key', 'environment-model': `复用本机 ${settings.ocrKeyVariable || '智普模型'} Key`,
+    'endpoint-mismatch': 'OCR 接口与智普 Key 所属平台不一致，请调整地址或单独填写 OCR Key',
+    missing: '未找到可复用的智普 Key'
+  }[settings.ocrKeySource] || '未配置';
+  $('#ocr-key-status').textContent = `${ocrSource}。实际接口：${settings.effectiveOcrApiUrl || settings.ocrApiUrl}。环境变量密钥只在本机内存中使用。`;
+  syncModelSource();
+}
+function syncModelSource() {
+  const source = $('#model-config-source').value;
+  const inherited = source === 'environment' || (source === 'auto' && desktopInfo?.settings?.effectiveModelSource === 'environment');
+  const localClaude = !inherited && $('#model-provider').value === 'local-claude-sdk';
+  for (const id of ['#model-provider', '#model-name']) $(id).disabled = inherited;
+  for (const id of ['#model-api-url', '#model-api-key']) $(id).disabled = inherited || localClaude;
+  $('#model-api-key').placeholder = inherited ? '从本机环境变量读取，不回显密钥' : localClaude ? '本机 Claude 管理凭据，无需填写' : '留空保留已有密钥';
 }
 async function loadDesktop() {
   try {
@@ -26,22 +81,35 @@ async function loadDesktop() {
     desktopInfo = await response.json();
     if (!desktopInfo.desktop) return;
     $('#desktop-setup').hidden = false;
-    $('#desktop-setup').open = !desktopInfo.settings.modelKeyConfigured;
     $('#desktop-data-path').textContent = desktopInfo.workspace;
     $('#runtime-hint').textContent = '关闭窗口继续运行 · 菜单退出停止';
     $('#notification-platform').textContent = '桌面应用原生通知';
     renderModelSettings(desktopInfo.settings);
+    $('#model-config-source').addEventListener('change', syncModelSource);
+    $('#model-environment-refresh').addEventListener('click', async () => {
+      $('#model-environment-refresh').disabled = true;
+      $('#model-environment-status').textContent = '正在读取本机模型环境变量…';
+      try { renderModelSettings(await opsRequest('/api/desktop/settings/environment', {})); }
+      catch (error) { $('#model-environment-status').textContent = error.message; }
+      finally { $('#model-environment-refresh').disabled = false; }
+    });
+    $('#settings-runtime').innerHTML = [['版本', `RFQ 助手 ${desktopInfo.version || '—'}`], ['系统', desktopInfo.platform === 'darwin' ? 'macOS' : desktopInfo.platform === 'win32' ? 'Windows' : desktopInfo.platform], ['运行环境', `Electron ${desktopInfo.runtime?.electron || '—'} / Chromium ${desktopInfo.runtime?.chromium || '—'}`], ['数据保存', '本机工作区；升级保留已导入数据']].map(([key, value]) => `<div><dt>${esc(key)}</dt><dd>${esc(value)}</dd></div>`).join('');
     $('#model-provider').addEventListener('change', () => {
+      // 用户显式选择调用方式后退出“自动”，避免保存时又被环境 HTTP
+      // 优先级覆盖，造成界面选了 Claude / HTTP 却运行另一种方式。
+      if ($('#model-config-source').value === 'auto') $('#model-config-source').value = 'manual';
       const anthropic = $('#model-provider').value === 'anthropic-http';
-      $('#model-api-url').value = anthropic ? 'https://api.anthropic.com/v1/messages' : 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
-      $('#model-name').value = anthropic ? '' : 'glm-4.7';
+      if ($('#model-provider').value !== 'local-claude-sdk') $('#model-api-url').value = anthropic ? 'https://api.anthropic.com/v1/messages' : 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+      if (!$('#model-name').value.trim()) $('#model-name').value = 'glm-5.3';
+      syncModelSource();
     });
     $('#model-settings-form').addEventListener('submit', async (event) => {
       event.preventDefault(); $('#model-save').disabled = true;
       try {
-        const value = await opsRequest('/api/desktop/settings', { agentProvider: $('#model-provider').value,
-          modelName: $('#model-name').value, modelApiUrl: $('#model-api-url').value,
-          modelApiKey: $('#model-api-key').value, ocrProvider: $('#ocr-provider').value,
+        const source = $('#model-config-source').value;
+        const value = await opsRequest('/api/desktop/settings', { modelConfigSource: source, ...($('#model-provider').disabled ? {} : { agentProvider: $('#model-provider').value,
+          modelName: $('#model-name').value, ...($('#model-api-key').disabled ? {} : { modelApiUrl: $('#model-api-url').value,
+          modelApiKey: $('#model-api-key').value }) }), ocrProvider: $('#ocr-provider').value,
           ocrApiKey: $('#ocr-api-key').value, ocrApiUrl: $('#ocr-api-url').value,
           quotePort: $('#quote-port').value, pollIntervalSeconds: $('#poll-interval').value });
         renderModelSettings(value);
@@ -49,7 +117,7 @@ async function loadDesktop() {
       finally { $('#model-save').disabled = false; }
     });
     $('#model-test').addEventListener('click', async () => {
-      $('#model-test').disabled = true; $('#model-settings-status').textContent = '正在测试已保存的模型配置…';
+      $('#model-test').disabled = true; $('#model-settings-status').textContent = '正在测试当前调用方式…';
       try { $('#model-settings-status').textContent = (await opsRequest('/api/desktop/model/test', {})).detail; }
       catch (error) { $('#model-settings-status').textContent = error.message; }
       finally { $('#model-test').disabled = false; }
@@ -67,6 +135,66 @@ async function loadDesktop() {
       finally { $('#desktop-import').disabled = false; }
     });
   } catch (error) { $('#model-settings-status').textContent = `无法读取应用设置：${error.message}`; }
+}
+
+function renderBrowser() {
+  const b = state.browser;
+  if (!b) return;
+  const busy = b.busy || state.browserAction || state.envLoading || state.ops?.envChecking || ['running', 'stopping', 'indexing'].includes(state.ops?.run?.status);
+  $('#browser-live-status').textContent = busy ? '任务 / 检查正在使用浏览器' : '窗口状态自动更新 · 登录状态定期检查';
+  $('#browser-window-badge').textContent = !b.opened ? '未打开' : b.loading ? '加载中' : b.visible ? '窗口已显示' : '窗口在后台';
+  $('#browser-window-badge').className = `pill ${b.opened && !b.error ? '' : 'gray'}`;
+  $('#browser-page-title').textContent = b.title || (b.opened ? 'Alibaba 浏览器' : '尚未打开浏览器');
+  const authorized = state.ops?.settings.browserEnabled ?? b.browserEnabled;
+  const facts = [['当前页面', b.page || '打开浏览器后显示'], ['Alibaba 账号', b.checks?.find((x) => x.key === 'login')?.state || '正在确认'], ['独立会话', 'Alibaba 专用 · 登录保存在本机'], ['Agent 操作权限', authorized ? '已开启 · 启动任务后运行' : '已关闭 · 手动浏览可用'], ['任务占用', busy ? '占用中 · 暂停导航' : '空闲'], ['浏览器内核', `Chromium ${b.chromium || desktopInfo?.runtime?.chromium || '—'}`]];
+  $('#browser-facts').innerHTML = facts.map(([key, value]) => `<div><dt>${esc(key)}</dt><dd>${esc(value)}</dd></div>`).join('');
+  $('#browser-last-error').hidden = !b.error;
+  $('#browser-last-error').textContent = b.error || '';
+  $('#browser-inspection-result').textContent = b.loading ? '页面加载完成后自动检查登录状态。' : b.inspectionError || (b.inspection ? `${b.inspection.detail} · 检查于 ${new Date(b.inspection.checkedAt).toLocaleString('zh-CN')}` : !b.opened ? '打开浏览器后自动检查登录状态。' : '正在确认当前页面的登录状态…');
+  $('#browser-inspect').disabled = !b.opened || busy || b.loading;
+  $('#browser-login-import').disabled = busy || b.loading;
+  $('#embedded-browser-open').disabled = state.browserAction;
+  $('#embedded-browser-home').disabled = busy;
+  $('#browser-navigate').disabled = busy;
+  document.querySelectorAll('[data-browser-action]').forEach((button) => {
+    const action = button.dataset.browserAction;
+    button.disabled = !b.opened || (action !== 'hide' && busy) || (action === 'back' && !b.canGoBack) || (action === 'forward' && !b.canGoForward);
+  });
+  $('#browser-navigation-help').textContent = busy ? '任务或检测正在占用页面。请先在报价 Agent 停止任务，完成后再导航。' : '支持 Alibaba 官方网站和登录页；网址中不会回显登录查询参数。任务运行期间请勿手动切换页面。';
+}
+
+async function loadBrowser() {
+  if (desktopInfo?.browserProvider !== 'electron-cdp' || state.browserLoading) return;
+  state.browserLoading = true;
+  try {
+    const response = await fetch('/api/desktop/browser');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    state.browser = await response.json(); renderBrowser(); renderEnv();
+  } catch (error) { $('#browser-live-status').textContent = `无法读取浏览器状态：${error.message}`; }
+  finally { state.browserLoading = false; }
+}
+
+async function browserAction(action, url) {
+  if (state.browserAction) return;
+  state.browserAction = true; renderBrowser();
+  $('#embedded-browser-status').textContent = action === 'inspect' ? '正在只读检测当前页面…' : '正在操作浏览器…';
+  try {
+    state.browser = await opsRequest(`/api/desktop/browser/${action === 'inspect' ? 'inspect' : 'navigate'}`, action === 'inspect' ? {} : { action, ...(url ? { url } : {}) });
+    $('#embedded-browser-status').textContent = action === 'inspect' ? '只读检测完成；没有开启 Agent 控制或报价。' : '浏览器操作完成。';
+  } catch (error) { $('#embedded-browser-status').textContent = error.message; }
+  finally { state.browserAction = false; await loadBrowser(); renderBrowser(); }
+}
+async function importBrowserLogin() {
+  if (state.browserAction) return;
+  state.browserAction = true; renderBrowser();
+  const status = $('#browser-import-status'); status.textContent = '请选择原 Chrome 导出的 Alibaba 登录 JSON 文件…';
+  try {
+    const result = await opsRequest('/api/desktop/browser/import', {});
+    if (result.canceled) { status.textContent = '已取消，当前登录记录保持不变。'; return; }
+    status.textContent = `${result.detail}${result.ignored || result.expired || result.unsupported ? ` 已跳过 ${result.ignored} 条其他域名、${result.expired} 条过期和 ${result.unsupported} 条分区记录。` : ''}`;
+    state.browser = await opsRequest('/api/desktop/browser/open', { url: 'https://sourcing.alibaba.com/rfq_search_list.htm' });
+  } catch (error) { status.textContent = error.message; }
+  finally { state.browserAction = false; await loadBrowser(); renderBrowser(); }
 }
 
 function firstPrice(item) {
@@ -290,22 +418,58 @@ async function copyExtensionField(selector, label) {
   }
 }
 
+function renderEnv() {
+  if (!state.env) return;
+  const embedded = desktopInfo?.browserProvider === 'electron-cdp';
+  // 环境配置保持独立；窗口与登录来自同一份实时状态，避免两个页面
+  // 一个“未检测”、一个“已登录”。不会为更新状态改动任何操作权限。
+  const checks = state.env.checks.map((check) => state.browser?.checks?.find((x) => x.key === check.key) || check);
+  const row = (check) => {
+    const skipped = state.env.status === 'skipped' && ['bridge', 'login'].includes(check.key);
+    const status = check.state || (check.ok ? '就绪' : skipped ? '未检测' : check.required === false ? '待配置' : '需要处理');
+    return `<div class="env-row ${check.ok ? 'ok' : skipped || check.state === '请先打开浏览器' || check.state === '页面加载中' ? 'skipped' : 'bad'}"><span class="env-dot" aria-hidden="true"></span><div><div class="env-row-heading"><strong>${esc(check.label)}</strong><span class="env-state">${esc(status)}</span></div><small>${esc(check.detail)}</small>${check.help ? `<p>${esc(check.help)}</p>` : ''}${['model', 'ocr', 'port'].includes(check.key) && !check.ok ? '<button class="text-button" type="button" data-view="settings">去设置 ↗</button>' : ''}</div></div>`;
+  };
+  const detailsOpen = $('#env-config-checks details')?.open;
+  const primary = checks.filter((x) => ['bridge', 'login'].includes(x.key));
+  const configuration = checks.filter((x) => ['model', 'ocr', 'port'].includes(x.key));
+  const diagnostic = checks.filter((x) => !['bridge', 'login', 'model', 'ocr', 'port'].includes(x.key));
+  const html = `<div class="env-checks">${(embedded ? primary : checks).map(row).join('')}</div>`;
+  const more = embedded ? `<div class="env-checks env-configuration">${configuration.map(row).join('')}</div><details class="env-diagnostics"><summary>运行环境详情</summary><div class="env-checks">${diagnostic.map(row).join('')}</div></details>` : '';
+  // 自动刷新时保留焦点和展开状态，不持续销毁正在交互的节点。
+  if ($('#env-checks').dataset.rendered !== html) { $('#env-checks').innerHTML = html; $('#env-checks').dataset.rendered = html; }
+  if ($('#env-config-checks').dataset.rendered !== more) {
+    $('#env-config-checks').innerHTML = more; $('#env-config-checks').dataset.rendered = more;
+    if ($('#env-config-checks details')) $('#env-config-checks details').open = Boolean(detailsOpen);
+  }
+  if (embedded) {
+    const browser = primary.find((x) => x.key === 'bridge');
+    const login = primary.find((x) => x.key === 'login');
+    const action = login?.action ? login : browser;
+    const button = $('#env-browser-action');
+    button.textContent = action?.actionLabel || '打开浏览器';
+    button.dataset.openBrowser = action?.action || 'open_browser';
+    button.disabled = state.browserAction || (action?.action === 'open_rfq' && (state.browser?.busy || ['running', 'stopping', 'indexing'].includes(state.ops?.run?.status)));
+    $('#env-time').textContent = login?.checkedAt ? `登录检查于 ${new Date(login.checkedAt).toLocaleTimeString('zh-CN')}` : state.browser?.loading ? '等待页面加载…' : '状态自动更新';
+  } else $('#env-time').textContent = state.env.checkedAt ? `检测于 ${new Date(state.env.checkedAt).toLocaleString('zh-CN')}` : '—';
+}
+
 async function loadEnv(force = false) {
   // 避免切换页面/连续点击同时触发检测；服务端仍负责真正的浏览器互斥。
   if (state.envLoading) return;
   state.envLoading = true;
   renderOps();
   const box = $('#env-checks');
-  box.innerHTML = '<p class="ops-help">正在检测运行环境…（最长约 30 秒）</p>';
+  if (!state.env) box.innerHTML = '<p class="ops-help">正在检查运行准备情况…</p>';
   try {
     const response = await fetch(`/api/env/check${force ? '?force=1' : ''}`);
     const value = await response.json();
     if (!response.ok) throw new Error(value.error || `HTTP ${response.status}`);
-    // 主动跳过连接不代表故障，用灰色区分“未检测”和真正的依赖错误。
-    box.innerHTML = value.checks.map((check) => `<div class="env-row ${check.ok ? 'ok' : value.status === 'skipped' && ['bridge', 'login'].includes(check.key) ? 'skipped' : 'bad'}"><span class="env-dot" aria-hidden="true"></span><div><strong>${esc(check.label)}</strong><small>${esc(check.detail)}</small></div></div>`).join('');
-    $('#env-time').textContent = value.checkedAt ? `检测于 ${new Date(value.checkedAt).toLocaleString('zh-CN')}` : '—';
+    state.env = value;
+    if (value.browser) state.browser = value.browser;
+    renderEnv(); renderBrowser();
   } catch (error) {
     box.innerHTML = `<p class="ops-help">环境检测失败：${esc(error.message)}</p>`;
+    delete box.dataset.rendered;
     $('#env-time').textContent = '—';
   } finally {
     state.envLoading = false;
@@ -314,16 +478,24 @@ async function loadEnv(force = false) {
 }
 
 function setView(view) {
-  state.view = view === 'console' ? 'console' : 'cases';
+  state.view = ['cases', 'console', 'browser', 'settings'].includes(view) ? view : 'cases';
   $('#case-workspace').hidden = state.view !== 'cases';
   $('#console-workspace').hidden = state.view !== 'console';
+  $('#browser-workspace').hidden = state.view !== 'browser';
+  $('#settings-workspace').hidden = state.view !== 'settings';
   $('#case-navigation').hidden = state.view !== 'cases';
-  document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === state.view));
+  document.querySelectorAll('.workspace-nav [data-view]').forEach((button) => { button.classList.toggle('active', button.dataset.view === state.view); button.setAttribute('aria-current', button.dataset.view === state.view ? 'page' : 'false'); });
+  const headings = { cases: ['报价<span>数据集</span>', '真实需求与报价样例：保留买家需求、报价过程与决策边界，为后续案例检索与学习准备语料。'], console: ['报价<span>Agent</span>', '扫描需求、分析草稿与逐单报价。环境和任务状态都保留在本机。'], browser: ['应用<span>浏览器</span>', '打开 Alibaba、查看窗口与登录状态。手动浏览和 Agent 运行各自控制。'], settings: ['应用<span>设置</span>', '模型、图片识别、报价与监控配置，以及本机数据管理。'] };
+  $('.title-row h1').innerHTML = headings[state.view][0];
+  $('.intro').textContent = headings[state.view][1];
+  $('.index-stamp').hidden = state.view !== 'cases';
   const url = new URL(location.href);
-  if (state.view === 'console') url.searchParams.set('view', 'console');
+  if (state.view !== 'cases') url.searchParams.set('view', state.view);
   else url.searchParams.delete('view');
   history.replaceState({}, '', url);
   if (state.view === 'console') { updateOps(); loadEnv(); }
+  if (state.view === 'browser') { updateOps(); loadBrowser(); }
+  window.scrollTo({ top: 0 });
 }
 
 async function opsRequest(path, payload) {
@@ -338,6 +510,7 @@ function renderOps() {
   if (!data) return;
   const run = data.run;
   $('#browser-enabled').checked = data.settings.browserEnabled;
+  $('#browser-page-enabled').checked = data.settings.browserEnabled;
   $('#alerts-enabled').checked = data.settings.alertsEnabled;
   $('#notifications-enabled').checked = data.settings.notificationsEnabled;
   $('#notifications-enabled').disabled = data.notifications?.supported === false;
@@ -373,6 +546,7 @@ function renderOps() {
   alert.hidden = !state.opsFlash && (!data.settings.alertsEnabled || !run?.alert);
   alert.textContent = state.opsFlash || run?.alert || '';
   renderQuoteButtons();
+  renderBrowser();
 }
 
 const quoteStatusNames = { quoted: '规则价已确认', needs_review: '需要人工复核', conditional_quote: '条件报价', submitted: '已提交', filled_not_submitted: '已回填，未提交', plugin_prepared_not_submitted: '已分析，未提交', dry_run_not_submitted: '试跑，未提交', skipped: '未联系' };
@@ -551,12 +725,30 @@ async function runAction(kind) {
 async function start() {
   try {
     await loadDesktop();
+    renderBrowserSetup();
+    $('#embedded-browser-open').addEventListener('click', () => openEmbeddedBrowser());
+    $('#embedded-browser-home').addEventListener('click', () => openEmbeddedBrowser('https://sourcing.alibaba.com/rfq_search_list.htm'));
+    document.addEventListener('click', (event) => {
+      const link = event.target.closest('a[href]');
+      if (desktopInfo?.browserProvider === 'electron-cdp' && link && safeAlibabaUrl(link.href)) {
+        event.preventDefault(); void openEmbeddedBrowser(link.href);
+      }
+    });
     state.selected = new URL(location.href).searchParams.get('case');
     $('#search').addEventListener('input', (event) => { state.query = event.target.value; renderList(); });
     $('#category').addEventListener('change', (event) => { state.category = event.target.value; renderList(); });
     $('#priced').addEventListener('change', (event) => { state.priced = event.target.checked; renderList(); });
-    document.addEventListener('keydown', (event) => { if (event.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { event.preventDefault(); $('#search').focus(); } });
-    document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
+    document.addEventListener('keydown', (event) => { if (state.view === 'cases' && event.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { event.preventDefault(); $('#search').focus(); } });
+    // 页面链接与动态生成的环境建议共用导航，新增设置项无需再次绑定事件。
+    document.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-view]'); if (button) setView(button.dataset.view);
+      const browserButton = event.target.closest('[data-open-browser]');
+      if (browserButton) openEmbeddedBrowser(browserButton.dataset.openBrowser === 'open_rfq' ? 'https://sourcing.alibaba.com/rfq_search_list.htm' : undefined);
+    });
+    document.querySelectorAll('[data-browser-action]').forEach((button) => button.addEventListener('click', () => browserAction(button.dataset.browserAction)));
+    $('#browser-address-form').addEventListener('submit', (event) => { event.preventDefault(); browserAction('navigate', $('#browser-address').value.trim()); });
+    $('#browser-inspect').addEventListener('click', () => browserAction('inspect'));
+    $('#browser-login-import').addEventListener('click', importBrowserLogin);
     document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => runAction(button.dataset.action)));
     $('#env-recheck').addEventListener('click', () => loadEnv(true));
     $('#extension-prepare').addEventListener('click', prepareExtension);
@@ -580,15 +772,17 @@ async function start() {
       try { state.opsFlash = ''; state.ops = await opsRequest('/api/ops/settings', settings); renderOps(); await loadEnv(true); }
       catch (error) { state.opsFlash = error.message; renderOps(); }
     }));
-    for (const [key, id] of [['browserEnabled', '#browser-enabled'], ['alertsEnabled', '#alerts-enabled'], ['notificationsEnabled', '#notifications-enabled']]) {
+    for (const [key, id] of [['browserEnabled', '#browser-enabled'], ['browserEnabled', '#browser-page-enabled'], ['alertsEnabled', '#alerts-enabled'], ['notificationsEnabled', '#notifications-enabled']]) {
       $(id).addEventListener('change', async (event) => {
         try {
           state.opsFlash = '';
           if (key === 'notificationsEnabled') state.notificationFlash = '';
           state.ops = await opsRequest('/api/ops/settings', { [key]: event.target.checked });
           renderOps();
-          // 立即刷新授权状态；关闭时服务端仅返回本地检查，不连接 Chrome。
+          // 更新操作授权不改变登录状态；桌面版继续只读检查自有窗口，
+          // Web / CLI 关闭授权后不会连接 Chrome。
           if (key === 'browserEnabled') await loadEnv(true);
+          if (key === 'browserEnabled') await loadBrowser();
         }
         catch (error) { event.target.checked = !event.target.checked; state.opsFlash = error.message; renderOps(); }
       });
@@ -599,11 +793,12 @@ async function start() {
     });
     await reloadCatalog();
     await updateOps();
-    await loadExtension();
+    if (desktopInfo?.browserProvider !== 'electron-cdp') await loadExtension();
     await loadQuotes();
-    setView(new URL(location.href).searchParams.get('view') || (desktopInfo?.desktop && !desktopInfo.settings.modelKeyConfigured ? 'console' : 'cases'));
+    await loadBrowser();
+    setView(new URL(location.href).searchParams.get('view') || (desktopInfo?.desktop && !desktopInfo.settings.modelReady ? 'settings' : 'cases'));
     if (new URL(location.href).searchParams.has('draft') && state.view === 'console') $('#quote-detail')?.scrollIntoView({ block: 'start' });
-    setInterval(() => { if (state.view === 'console' || ['running', 'stopping', 'indexing'].includes(state.ops?.run?.status)) updateOps(); }, 2000);
+    setInterval(() => { if (['console', 'browser'].includes(state.view) || ['running', 'stopping', 'indexing'].includes(state.ops?.run?.status)) updateOps(); if (['console', 'browser'].includes(state.view)) loadBrowser(); }, 2000);
   } catch (error) {
     $('#case-detail').innerHTML = `<div class="empty">无法读取 CASE 数据：${esc(error.message)}<br>请先运行 npm run cases:build，然后启动本地页面。</div>`;
   }
