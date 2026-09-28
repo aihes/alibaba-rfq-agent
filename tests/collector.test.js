@@ -77,3 +77,18 @@ test("numeric pagination uses the marked current page and rejects an unreadable 
   page.evaluateJson = async () => ({ next: [{ href: "javascript:nextPage()" }], numeric: [] });
   await assert.rejects(nextSearchPageUrl(page, url, "bag"), /未完成全部扫描/);
 });
+
+test("follows Alibaba's actual pagination route and lowercase searchText", async () => {
+  const first = buildSearchUrl("https://sourcing.alibaba.com/rfq_search_list.htm", "kraft paper food bag");
+  const second = "https://sourcing.alibaba.com/rfq/rfq_search_list.htm?spm=a2700&searchText=kraft+paper+food+bag&page=2";
+  const page = { evaluateJson: async () => ({ next: [{ href: second }], numeric: [] }) };
+  assert.equal(await nextSearchPageUrl(page, first, "kraft paper food bag"), second);
+  page.evaluateJson = async () => ({ next: [{ href: second.replace("kraft+paper+food+bag", "unrelated+product") }], numeric: [] });
+  await assert.rejects(nextSearchPageUrl(page, first, "kraft paper food bag"), /未完成全部扫描/);
+});
+
+test("stops on Alibaba's final page even when disabled next controls have no link", async () => {
+  const last = "https://sourcing.alibaba.com/rfq/rfq_search_list.htm?searchText=kraft+paper+food+bag&page=13";
+  const page = { evaluateJson: async () => ({ next: [{ href: "" }], numeric: [], pageStatuses: [{ current: 13, total: 13 }] }) };
+  assert.equal(await nextSearchPageUrl(page, last, "kraft paper food bag"), null);
+});

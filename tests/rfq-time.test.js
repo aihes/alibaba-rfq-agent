@@ -7,6 +7,8 @@ test("parses buyer publication time and filters at each card's observation time"
   const recent = parsePublishedAt("Posted 45 minutes ago", observedAt);
   assert.equal(recent, "2026-09-28T07:15:00.000Z");
   assert.equal(parsePublishedAt("发布于 2小时前", observedAt), "2026-09-28T06:00:00.000Z");
+  assert.equal(parsePublishedAt("发布日期:7 小时前", observedAt), "2026-09-28T01:00:00.000Z");
+  assert.equal(parsePublishedAt("发布日期:3 天前", observedAt), "2026-09-25T08:00:00.000Z");
   assert.equal(parsePublishedAt("Posted on 2026-09-28 15:00", observedAt) != null, true);
   assert.equal(parsePublishedAt("unknown", observedAt), null);
   assert.equal(publishedWithinMinutes({ publishedAt: recent }, 60, observedAt), true);

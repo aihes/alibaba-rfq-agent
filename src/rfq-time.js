@@ -4,7 +4,9 @@
 export function parsePublishedAt(value, now = new Date()) {
   const text = String(value || "").trim();
   if (!text) return null;
-  const normalized = text.replace(/^(?:posted|published|发布(?:于|时间)?|发布时间)\s*(?:on|at)?\s*[:：]?\s*/i, "").trim();
+  // Alibaba's Chinese list cards use “发布日期:7 小时前”. Strip the whole
+  // label before parsing; leaving “日期” in front hides every relative time.
+  const normalized = text.replace(/^(?:posted|published|发布(?:日期|时间|于)?)\s*(?:on|at)?\s*[:：]?\s*/i, "").trim();
   if (/^\d{4}-\d{2}-\d{2}T/.test(normalized)) {
     const iso = Date.parse(normalized);
     return Number.isFinite(iso) ? new Date(iso).toISOString() : null;

@@ -77,10 +77,16 @@ export async function nextSearchPageUrl(page, currentUrl, searchTerm) {
       next: items.filter((item) => !item.disabled && ((item.pagination && /^(next|next page|下一页|下页|›|»|>)$/i.test(item.text))
         || (item.pagination && /^(next|next page|下一页)$/i.test(item.label)) || /\\bnext\\b/i.test(item.rel)
         || /(?:pagination|pager)[-_ ]?next|next[-_ ]?(?:page|pagination)/i.test(item.className + ' ' + item.parentClass))),
-      numeric: items.filter((item) => item.pagination && /^\\d+$/.test(item.text)).map(({ href, text, active, disabled }) => ({ href, number: Number(text), active, disabled }))
+      numeric: items.filter((item) => item.pagination && /^\\d+$/.test(item.text)).map(({ href, text, active, disabled }) => ({ href, number: Number(text), active, disabled })),
+      // Alibaba also renders "13 / 13" on the final page while its disabled
+      // 下一页 control may remain in the DOM without a navigable href.
+      pageStatuses: Array.from(document.querySelectorAll('[class*="pagination"], [class*="pager"]'))
+        .map((element) => (element.textContent || '').match(/(?:^|\\D)(\\d+)\\s*\\/\\s*(\\d+)(?:\\D|$)/))
+        .filter(Boolean).map((match) => ({ current: Number(match[1]), total: Number(match[2]) }))
     };
   })()`);
   const current = new URL(currentUrl);
+  if (pagination.pageStatuses?.some(({ current: pageNumber, total }) => total > 0 && pageNumber === total)) return null;
   const activePage = pagination.numeric.find((item) => item.active)?.number;
   const numericNext = Number.isInteger(activePage)
     ? pagination.numeric.filter((item) => !item.disabled && item.number === activePage + 1) : [];
@@ -90,8 +96,13 @@ export async function nextSearchPageUrl(page, currentUrl, searchTerm) {
     let next;
     try { next = new URL(control.href, current); } catch { continue; }
     if (next.protocol !== current.protocol) continue;
-    if (next.origin !== current.origin || next.pathname !== current.pathname) continue;
-    const term = next.searchParams.get("SearchText");
+    // Alibaba's first search URL is /rfq_search_list.htm with SearchText,
+    // while its own pagination links use /rfq/rfq_search_list.htm with
+    // searchText. Both are the same list; keep the origin and search term
+    // checks while accepting those two site routes.
+    const searchListPath = /^(?:\/rfq)?\/rfq_search_list\.htm$/i;
+    if (next.origin !== current.origin || !searchListPath.test(current.pathname) || !searchListPath.test(next.pathname)) continue;
+    const term = [...next.searchParams].find(([key]) => key.toLowerCase() === "searchtext")?.[1];
     if (term && term !== searchTerm) continue;
     if (!term) next.searchParams.set("SearchText", searchTerm);
     if (next.href !== current.href) return next.href;

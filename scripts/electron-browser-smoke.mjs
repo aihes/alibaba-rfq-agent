@@ -36,14 +36,16 @@ app.whenReady().then(async () => {
         <p class="brh-rfq-item__detail">500 B flute cartons</p><p class="brh-rfq-item__quantity">500 Pieces</p>
         <p class="brh-rfq-item__country">Ukraine</p><p class="brh-rfq-item__quote-left">6</p><p class="brh-rfq-item__publishtime">15 minutes ago</p>
         <a href="/rfq_quotation_post.htm">Quote</a>
-      </article><nav class="pagination"><a href="/quote?SearchText=carton&page=2">Next</a></nav>
+      </article><nav class="pagination"><a href="/rfq/rfq_search_list.htm?searchText=carton&page=2">Next</a></nav>
       <div class="rfq-detail-info-body">Fixture B flute carton, 310x235x165mm</div>`);
     const secondPage = html.replace("Fixture corrugated carton box", "Fixture second page carton box")
       .replace("p=fixture", "p=fixture-second").replace(/<nav class="pagination">.*?<\/nav>/, "");
     fixture = http.createServer((req, res) => { res.writeHead(200, { "Content-Type": "text/html" });
       res.end(new URL(req.url, "http://localhost").searchParams.get("page") === "2" ? secondPage : html); });
     await new Promise((resolve) => fixture.listen(0, "127.0.0.1", resolve));
-    const home = `http://127.0.0.1:${fixture.address().port}/quote`;
+    // Exercise the two list routes Alibaba actually uses: the initial search
+    // path and the /rfq/ path reached through pagination.
+    const home = `http://127.0.0.1:${fixture.address().port}/rfq_search_list.htm`;
     const allowed = (value) => { try { return new URL(value).origin === new URL(home).origin; } catch { return false; } };
     fs.mkdirSync(path.join(root, "data/case-catalog"), { recursive: true });
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
