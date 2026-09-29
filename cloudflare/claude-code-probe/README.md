@@ -3,7 +3,7 @@
 This isolated Worker verifies that Claude Code can start inside a Cloudflare
 Container and make one fixed GLM inference request. It does not accept arbitrary
 prompts or commands, contain an API key in source, or connect the RFQ desktop app
-to a remote service. It is deployed at
+to a remote service. It is deployed at `https://glm.knowflow.work/` and
 `https://claude-probe.knowflow.work/` on the account with Containers access.
 
 The Worker uses the public `node:22-slim` image. On the first authorized
@@ -34,3 +34,11 @@ After configuring `GLM_API_KEY` from the local Claude settings as a Cloudflare
 secret, an unauthorized `POST /test-model` returned HTTP 401 and an authorized
 call returned HTTP 200 with `GLM_REMOTE_OK` from `GLM-5.3[1m]`. The Cloudflare
 container instance was read back as `inactive` after the request.
+
+On 2026-09-29, `glm.knowflow.work` was added as a second Cloudflare Custom
+Domain. Cloudflare's authoritative DNS and public resolvers returned its
+records; HTTPS `GET /` returned 200 on both domains. On the new domain,
+unauthorized `POST /test-model` returned 401 and the authorized fixed prompt
+returned `GLM_REMOTE_OK`. The model container was then read back as `inactive`.
+The public root route is only a health check; this probe is not yet a chat
+interface for classmates. Keep the probe token private.

@@ -6,7 +6,8 @@
   "compatibility_date": "2026-09-29",
   "workers_dev": true,
   "routes": [
-    { "pattern": "claude-probe.knowflow.work", "custom_domain": true }
+    { "pattern": "claude-probe.knowflow.work", "custom_domain": true },
+    { "pattern": "glm.knowflow.work", "custom_domain": true }
   ],
   "containers": [
     {
