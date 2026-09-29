@@ -105,7 +105,7 @@ export class ClaudeCodeProbe extends Container {
     const process = await this.ctx.container.exec(
       ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json",
         "--verbose", previousTranscript ? "--resume" : "--session-id", nativeId,
-        "--model", model],
+        "--model", model, "--max-turns", "1", "--tools", ""],
       {
         cwd: "/tmp",
         stdin,

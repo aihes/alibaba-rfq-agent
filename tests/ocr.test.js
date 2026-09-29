@@ -40,3 +40,23 @@ test("WebP attachments convert to PNG without external runtimes; errors never ex
     assert.match(timeout.error, /超时/);
   } finally { fs.unlinkSync(file); }
 });
+
+test("cloud OCR sends a PNG image through the owner service with its client token", async () => {
+  const file = path.join(os.tmpdir(), `rfq-cloud-ocr-${process.pid}.png`);
+  fs.writeFileSync(file, await sharp({ create: { width: 10, height: 10, channels: 3, background: "white" } }).png().toBuffer());
+  try {
+    const result = await extractImageText(file, { ocrProvider: "cloud-ocr", ocrApiKey: "test-only-client-token",
+      ocrApiUrl: "https://glm.knowflow.work/v1/ocr" }, { request: async (url, options) => {
+        assert.equal(url, "https://glm.knowflow.work/v1/ocr");
+        assert.equal(options.headers.Authorization, "Bearer test-only-client-token");
+        const body = JSON.parse(options.body);
+        assert.equal(body.image.mime_type, "image/png");
+        assert.ok(body.image.data.length > 0);
+        assert.equal(body.model, undefined);
+        return Response.json({ status: "read", text: "RFQ 123", provider_request_id: "fixture" });
+      } });
+    assert.equal(result.text, "RFQ 123");
+    assert.equal(result.provider, "cloud-ocr");
+    assert.equal(result.requestId, "fixture");
+  } finally { fs.rmSync(file, { force: true }); }
+});

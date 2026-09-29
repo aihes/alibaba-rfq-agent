@@ -196,7 +196,7 @@ export class OperatorConsole {
   }
   serviceFingerprint(key, env = this.environment()) {
     const fields = key === "model"
-      ? ["AGENT_PROVIDER", "MODEL_NAME", "MODEL_API_URL", "MODEL_API_KEY", "LOCAL_CLAUDE_EXECUTABLE", "LOCAL_CLAUDE_MODEL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]
+      ? ["AGENT_PROVIDER", "MODEL_NAME", "MODEL_API_URL", "MODEL_API_KEY", "RFQ_CLOUD_TOKEN", "LOCAL_CLAUDE_EXECUTABLE", "LOCAL_CLAUDE_MODEL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]
       : ["OCR_PROVIDER", "GLM_OCR_API_URL", "GLM_OCR_API_KEY"];
     return crypto.createHash("sha256").update(JSON.stringify(fields.map(field => env[field] || ""))).digest("hex");
   }
@@ -227,13 +227,17 @@ export class OperatorConsole {
       const ocrCheck = this.serviceCheck("ocr", env);
       checks.push({ key: "model", ok: modelReady && modelCheck?.ok === true, required: false, label: "需求分析模型",
         state: !modelReady ? "待配置" : !modelCheck ? "已配置 · 待检测" : modelCheck.ok ? "实测可用" : "检测失败",
-        detail: modelReady ? localClaude ? `本机 Claude · ${env.LOCAL_CLAUDE_MODEL || "继承用户模型"}` : `${env.MODEL_NAME || "已配置模型"} · ${env.RFQ_MODEL_CONFIG_SOURCE || "已保存配置"}`
-          : localClaude ? "未找到本机 Claude；请安装或在设置中选择 GLM HTTP" : "未配置模型 API Key",
+        detail: modelReady ? localClaude ? `本机 Claude · ${env.LOCAL_CLAUDE_MODEL || "继承用户模型"}`
+          : env.AGENT_PROVIDER === "cloud-claude" ? "云端 Claude Code · 文本 GLM-5.3 / 图片 Flash"
+            : `${env.MODEL_NAME || "已配置模型"} · ${env.RFQ_MODEL_CONFIG_SOURCE || "已保存配置"}`
+          : localClaude ? "未找到本机 Claude；请安装或在设置中选择云端服务" : env.AGENT_PROVIDER === "cloud-claude" ? "未配置云端服务授权令牌" : "未配置模型 API Key",
         help: modelCheck ? `${modelCheck.detail} · 检测于 ${new Date(modelCheck.checkedAt).toLocaleString("zh-CN")}` : "点击「测试模型」发送固定文本，确认当前调用方式可用；会产生少量模型用量",
         testable: modelReady });
       checks.push({ key: "ocr", ok: ocrReady && ocrCheck?.ok === true, required: false, label: "图片文字识别",
         state: env.OCR_PROVIDER === "off" ? "已关闭" : !ocrReady ? "待配置" : !ocrCheck ? "已配置 · 待检测" : ocrCheck.ok ? "实测可用" : "检测失败",
-        detail: env.OCR_PROVIDER === "off" ? "图片识别已关闭" : ocrReady ? "GLM OCR · API Key 已配置" : "GLM OCR · 尚未配置 API Key",
+        detail: env.OCR_PROVIDER === "off" ? "图片识别已关闭" : env.OCR_PROVIDER === "cloud-ocr"
+          ? ocrReady ? "云端 OCR · 已授权" : "云端 OCR · 未配置授权令牌"
+          : ocrReady ? "GLM OCR · API Key 已配置" : "GLM OCR · 尚未配置 API Key",
         help: ocrCheck && ocrReady ? `${ocrCheck.detail} · 检测于 ${new Date(ocrCheck.checkedAt).toLocaleString("zh-CN")}` : "点击「测试 OCR」识别内置样张；会产生少量 OCR 用量",
         testable: ocrReady });
       checks.push({ key: "port", ok: Boolean(env.QUOTE_PORT), required: false, label: "报价交货地点", detail: env.QUOTE_PORT || "尚未核实交货地点 / 港口", help: "缺失时可浏览或扫描，但报价须先人工核实并在设置页填写" });

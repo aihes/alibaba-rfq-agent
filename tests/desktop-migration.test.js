@@ -30,14 +30,17 @@ test("model environment keeps the endpoint paired with its key, excludes operati
   assert.equal(resolveGlmCredential({ MODEL_API_KEY: "fixture", MODEL_API_URL: "https://proxy.example/v1/chat/completions" }), null);
   assert.equal(resolveGlmCredential({ ZAI_APIKEY: "fixture", ZAI_BASE_URL: "https://proxy.example/v4" }), null);
 });
-test("desktop defaults to local Claude when available and explicitly keeps GLM HTTP as an option", () => {
+test("desktop defaults to cloud Claude and explicitly keeps local Claude and GLM HTTP", () => {
   const root = temporary(), fallbackRoot = temporary();
   try {
     assert.equal(findLocalClaudeExecutable({ LOCAL_CLAUDE_EXECUTABLE: process.execPath }), process.execPath);
     const local = new DesktopSettings(root, cipher, { localEnvironment: { variables: { ...localEnvironment.variables,
       LOCAL_CLAUDE_EXECUTABLE: process.execPath }, source: "fixture" }, detectClaude: e => e.LOCAL_CLAUDE_EXECUTABLE });
-    assert.equal(local.info().agentProvider, "local-claude-sdk"); assert.equal(local.info().modelName, "glm-5.3");
-    assert.equal(local.info().modelReady, true); assert.equal(local.environment().MODEL_API_KEY, "");
+    assert.equal(local.info().agentProvider, "cloud-claude"); assert.equal(local.info().modelName, "glm-5.3");
+    assert.equal(local.info().modelReady, false); assert.equal(local.environment().MODEL_API_KEY, "");
+    local.save({ modelConfigSource: "manual", agentProvider: "local-claude-sdk", ocrProvider: "glm-ocr",
+      ocrApiUrl: "https://open.bigmodel.cn/api/paas/v4/layout_parsing" });
+    assert.equal(local.info().modelReady, true);
     assert.equal(local.environment().LOCAL_CLAUDE_MODEL, "glm-5.3");
     assert.equal(local.environment().LOCAL_CLAUDE_SETTING_SOURCES, "none");
     assert.equal(local.environment().ANTHROPIC_AUTH_TOKEN, "synthetic-env-key");
@@ -45,7 +48,7 @@ test("desktop defaults to local Claude when available and explicitly keeps GLM H
     local.save({ agentProvider: "openai-http", modelApiKey: "synthetic-http-key" });
     assert.equal(local.environment().AGENT_PROVIDER, "openai-http"); assert.equal(local.environment().MODEL_API_KEY, "synthetic-http-key");
     const unavailable = new DesktopSettings(fallbackRoot, cipher, { localEnvironment: { variables: { GLM_API_KEY: "synthetic-fallback" }, source: "fixture" }, detectClaude: () => "" });
-    assert.equal(unavailable.environment().AGENT_PROVIDER, "openai-http"); assert.equal(unavailable.info().modelName, "glm-5.3");
+    assert.equal(unavailable.environment().AGENT_PROVIDER, "cloud-claude"); assert.equal(unavailable.info().modelName, "glm-5.3");
   } finally { fs.rmSync(root, { recursive: true }); fs.rmSync(fallbackRoot, { recursive: true }); }
 });
 test("local Claude connection test uses the app-selected executable without exposing credentials", async () => {
@@ -53,6 +56,7 @@ test("local Claude connection test uses the app-selected executable without expo
   fs.writeFileSync(path.join(root, "data/case-catalog/cases.json"), '{"cases":[],"counts":{}}');
   const settings = new DesktopSettings(root, cipher, { localEnvironment: { variables: { LOCAL_CLAUDE_EXECUTABLE: process.execPath }, source: "fixture" },
     detectClaude: () => process.execPath });
+  settings.save({ modelConfigSource: "manual", agentProvider: "local-claude-sdk" });
   let calls = 0;
   const service = await createCaseServer({ resources: path.resolve("."), workspace: root, desktop: true, desktopSettings: settings,
     environment: () => settings.environment(), testLocalClaude: async env => {
@@ -75,6 +79,7 @@ test("OCR probe recognizes a fixed sample and invalidates success when the key c
   const root = temporary(); fs.mkdirSync(path.join(root, "data/case-catalog"), { recursive: true });
   fs.writeFileSync(path.join(root, "data/case-catalog/cases.json"), '{"cases":[],"counts":{}}');
   const settings = new DesktopSettings(root, cipher, { localEnvironment: { variables: { GLM_OCR_API_KEY: "synthetic-ocr-key" }, source: "fixture" }, detectClaude: () => "" });
+  settings.save({ ocrProvider: "glm-ocr", ocrApiUrl: "https://open.bigmodel.cn/api/paas/v4/layout_parsing" });
   let response = { status: "read", text: "RFQ 123" }, calls = 0;
   const service = await createCaseServer({ resources: path.resolve("."), workspace: root, desktop: true, desktopSettings: settings,
     environment: () => settings.environment(), testOcr: async () => { calls++; return response; } });
@@ -94,7 +99,8 @@ test("auto uses local GLM without storing its key; manual and explicit environme
   const root = temporary();
   try {
     const settings = new DesktopSettings(root, cipher, { localEnvironment, reloadEnvironment: async () => ({ variables: {}, source: "测试空环境" }) });
-    settings.save({ agentProvider: "anthropic-http", modelApiUrl: "https://open.bigmodel.cn/api/anthropic/v1/messages" });
+    settings.save({ agentProvider: "anthropic-http", modelApiUrl: "https://open.bigmodel.cn/api/anthropic/v1/messages",
+      ocrProvider: "glm-ocr", ocrApiUrl: "https://open.bigmodel.cn/api/paas/v4/layout_parsing" });
     assert.equal(settings.environment().MODEL_API_KEY, "synthetic-env-key");
     assert.equal(settings.environment().ANTHROPIC_API_URL, "https://open.bigmodel.cn/api/anthropic/v1/messages");
     assert.equal(settings.info().effectiveModelSource, "environment");
@@ -120,14 +126,16 @@ test("OCR reuses an official GLM key with matching endpoint and keeps explicit O
   try {
     const settings = new DesktopSettings(root, cipher, { localEnvironment: { variables: { ZAI_APIKEY: "synthetic-zai-key",
       GLM_OCR_API_URL: "https://open.bigmodel.cn/api/paas/v4/layout_parsing" }, source: "fixture" }, detectClaude: () => "" });
+    settings.save({ ocrProvider: "glm-ocr", ocrApiUrl: "https://open.bigmodel.cn/api/paas/v4/layout_parsing" });
     assert.equal(settings.info().ocrKeyConfigured, true);
     assert.equal(settings.info().ocrKeyVariable, "ZAI_APIKEY");
     assert.equal(settings.environment().GLM_OCR_API_KEY, "synthetic-zai-key");
     assert.equal(settings.environment().GLM_OCR_API_URL, "https://api.z.ai/api/paas/v4/layout_parsing");
     assert.ok(!JSON.stringify(settings.info()).includes("synthetic-zai-key"));
-    assert.ok(!fs.existsSync(settings.file));
+    assert.ok(!fs.readFileSync(settings.file, "utf8").includes("synthetic-zai-key"));
 
-    settings.save({ modelConfigSource: "manual", agentProvider: "openai-http", modelApiKey: "synthetic-model-key" });
+    settings.save({ modelConfigSource: "manual", agentProvider: "openai-http",
+      modelApiUrl: "https://open.bigmodel.cn/api/paas/v4/chat/completions", modelApiKey: "synthetic-model-key" });
     assert.equal(settings.info().ocrKeySource, "saved-model");
     assert.equal(settings.environment().GLM_OCR_API_KEY, "synthetic-model-key");
     settings.save({ ocrApiKey: "synthetic-ocr-key" });
@@ -166,6 +174,7 @@ test("Finder fallback reads only Claude env, and shell failures never expose std
     assert.equal(inherited.claudeVariables.ANTHROPIC_AUTH_TOKEN, "synthetic-env-key");
     const withInheritedKey = new DesktopSettings(root, cipher, { localEnvironment: { ...inherited,
       variables: { ...inherited.variables, LOCAL_CLAUDE_EXECUTABLE: process.execPath } }, detectClaude: () => process.execPath });
+    withInheritedKey.save({ modelConfigSource: "manual", agentProvider: "local-claude-sdk" });
     assert.equal(withInheritedKey.environment().ANTHROPIC_AUTH_TOKEN, "synthetic-env-key");
     assert.equal(withInheritedKey.environment().LOCAL_CLAUDE_MODEL, "glm-5.3");
     const missing = path.join(root, "missing");

@@ -43,6 +43,7 @@ test("setup preserves Claude settings, backs them up, and makes the desktop dete
       ANTHROPIC_AUTH_TOKEN: "old-token", ANTHROPIC_BASE_URL: "https://other.example/api/anthropic" }, platform: "win32", claudeSettingsFile: file });
     const settings = new DesktopSettings(home, { decryptString: () => "" }, { localEnvironment: environment,
       detectClaude: (variables) => findLocalClaudeExecutable(variables, home) });
+    settings.save({ modelConfigSource: "manual", agentProvider: "local-claude-sdk" });
     assert.equal(settings.info().claudeExecutableAvailable, true);
     assert.equal(settings.environment().ANTHROPIC_AUTH_TOKEN, "synthetic-secret-key");
     assert.equal(settings.environment().ANTHROPIC_API_KEY, undefined);

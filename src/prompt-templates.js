@@ -3,7 +3,7 @@ import path from "node:path";
 import { resourceDir } from "./paths.js";
 
 const names = new Set(["classification.system", "draft.system", "rationale.system", "vision-probe", "input",
-  "image-read", "image-ocr", "image-none", "vision-read", "vision-ocr"]);
+  "image-read", "image-remote", "image-ocr", "image-none", "vision-read", "vision-ocr"]);
 
 /** Prompt files are packaged resources. Only the declared placeholders may be
  * substituted; missing values fail loudly instead of shipping {{...}} to a model. */

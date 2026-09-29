@@ -95,22 +95,22 @@
           <div id="settings-web-help" class="settings-sheet" hidden><h3>当前是 Web / CLI 模式</h3><p class="ops-help">模型与 OCR 配置使用项目本机环境文件。桌面版提供加密密钥保存和数据导入界面。</p></div>
           <div id="desktop-setup" class="settings-sheet" hidden>
             <h3>模型与运行配置</h3>
-            <p class="ops-help">优先使用本机 Claude 生成需求分析和报价话术；没有 Claude 时可使用 GLM 5.3 HTTP 接口。价格始终由报价规则计算，发送仍需逐单确认。</p>
+            <p class="ops-help">默认通过已授权的云端 Claude Code 分析需求和生成话术，图片使用云端视觉模型与 OCR；也可手动选择本机 Claude 或其他模型接口。价格仍由本地报价规则计算，发送仍需逐单确认。</p>
             <form id="model-settings-form" class="model-settings-form">
-              <fieldset class="settings-group wide" id="settings-model"><legend>01 / 模型服务</legend><label class="wide">模型配置来源<select id="model-config-source"><option value="auto">自动：优先本机 Claude；没有 Claude 时使用 GLM 环境变量</option><option value="environment">使用 GLM 环境变量 HTTP 请求</option><option value="manual">手动选择调用方式</option></select></label>
+              <fieldset class="settings-group wide" id="settings-model"><legend>01 / 模型服务</legend><label class="wide">模型配置来源<select id="model-config-source"><option value="auto">自动：云端 Claude（填写服务令牌后可用）</option><option value="environment">使用本机模型环境变量</option><option value="manual">手动选择调用方式</option></select></label>
               <p id="model-environment-status" class="ops-help wide" role="status"></p><div class="settings-actions wide"><button id="claude-setup" type="button">安装并配置本机 Claude</button><button id="model-environment-refresh" type="button">重新读取本机环境变量</button><small>点击后会打开系统终端；脚本从 Anthropic 官网安装 Claude，并在终端中提示输入智谱 Key。完成后重新读取配置并测试连接。</small></div>
-              <label>需求分析与话术服务<select id="model-provider"><option value="local-claude-sdk">本机 Claude（默认）</option><option value="openai-http">GLM / OpenAI 兼容 HTTP</option><option value="anthropic-http">GLM / Anthropic 兼容 HTTP</option></select></label>
+              <label>需求分析与话术服务<select id="model-provider"><option value="cloud-claude">云端 Claude Code（默认）</option><option value="local-claude-sdk">本机 Claude</option><option value="openai-http">GLM / OpenAI 兼容 HTTP</option><option value="anthropic-http">GLM / Anthropic 兼容 HTTP</option></select></label>
               <label>模型名称<input id="model-name" required maxlength="200" placeholder="glm-5.3" /></label>
               <label class="wide">模型接口地址<input id="model-api-url" type="url" required spellcheck="false" /></label>
-              <label>模型 API Key<input id="model-api-key" type="password" autocomplete="off" placeholder="留空保留已有密钥" /></label>
-              </fieldset><fieldset class="settings-group wide" id="settings-ocr"><legend>02 / 图片识别</legend><label>图片文字识别<select id="ocr-provider"><option value="glm-ocr">GLM OCR 云识别</option><option value="off">关闭图片识别</option></select></label>
-              <label>GLM OCR API Key<input id="ocr-api-key" type="password" autocomplete="off" placeholder="留空复用智普模型 Key 或本机环境变量" /></label>
-              <label>GLM OCR 接口地址<input id="ocr-api-url" type="url" required spellcheck="false" /></label>
+              <label>服务令牌 / 模型 API Key<input id="model-api-key" type="password" autocomplete="off" placeholder="留空保留已有令牌或密钥" /></label>
+              </fieldset><fieldset class="settings-group wide" id="settings-ocr"><legend>02 / 图片识别</legend><label>图片文字识别<select id="ocr-provider"><option value="cloud-ocr">云端 OCR（默认，复用服务令牌）</option><option value="glm-ocr">GLM OCR 直连</option><option value="off">关闭图片识别</option></select></label>
+              <label>OCR 专用 Key（可留空）<input id="ocr-api-key" type="password" autocomplete="off" placeholder="云端 OCR 默认复用上方服务令牌" /></label>
+              <label>图片识别接口地址<input id="ocr-api-url" type="url" required spellcheck="false" /></label>
               <p id="ocr-key-status" class="ops-help wide" role="status"></p>
               <div class="settings-actions wide"><button id="ocr-test" type="button">测试 OCR 识别</button><small id="ocr-settings-status" role="status" aria-live="polite">使用内置样张进行实际请求，会产生少量 OCR 用量。</small></div>
               </fieldset><fieldset class="settings-group wide" id="settings-run"><legend>03 / 报价与监控</legend><label>已核实的交货地点 / 港口<input id="quote-port" maxlength="200" placeholder="EXW 工厂城市或 FOB 装运港；未核实请留空" /></label>
               <label>持续监控间隔（秒）<input id="poll-interval" type="number" min="60" max="86400" required value="600" /></label>
-              </fieldset><p class="ops-help wide">分析时需求文本会发送到所选模型；开启 GLM OCR 后，RFQ 图片会发送到智谱识别，按服务用量计费。密钥保存在本机，保存后不回显。</p>
+              </fieldset><p class="ops-help wide">需求文本和所选图片会发送到当前模型服务；开启 OCR 后，图片也会发送到所选识别服务。服务令牌在本机加密保存，保存后不回显。调用会产生服务用量。</p>
               <div class="settings-actions wide"><button id="model-save" type="submit" class="primary">保存设置</button><button id="model-test" type="button">测试模型连接</button><button id="model-clear" type="button">清除已保存密钥</button></div>
             </form>
             <p id="model-settings-status" class="extension-status" role="status" aria-live="polite"></p>

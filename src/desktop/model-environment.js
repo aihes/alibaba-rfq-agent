@@ -5,6 +5,7 @@ import path from "node:path";
 
 // 仅包含模型配置；自动提交、浏览器令牌、通知权限不从 shell 导入。
 export const modelEnvironmentKeys = ["AGENT_PROVIDER", "MODEL_NAME", "MODEL_API_URL", "MODEL_API_KEY",
+  "RFQ_CLOUD_TOKEN",
   "GLM_API_KEY", "GLM_MODEL", "GLM_BASE_URL", "ZHIPU_API_KEY", "ZHIPUAI_API_KEY", "ZAI_API_KEY", "ZAI_APIKEY", "ZAI_BASE_URL",
   "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_URL", "ANTHROPIC_HTTP_MODEL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
   "GLM_OCR_API_KEY", "GLM_OCR_API_URL", "LOCAL_CLAUDE_EXECUTABLE", "LOCAL_CLAUDE_MODEL"];
@@ -19,6 +20,8 @@ function endpoint(value, suffix) {
 export function resolveEnvironmentModel(input) {
   const e = pickModelEnvironment(input);
   const name = e.MODEL_NAME || e.GLM_MODEL || e.ANTHROPIC_HTTP_MODEL || e.ANTHROPIC_MODEL || e.ANTHROPIC_DEFAULT_SONNET_MODEL || "glm-5.3";
+  if (e.RFQ_CLOUD_TOKEN) return { agentProvider: "cloud-claude", modelName: "glm-5.3",
+    modelApiUrl: "https://glm.knowflow.work/v1/agent", modelApiKey: e.RFQ_CLOUD_TOKEN, keyVariable: "RFQ_CLOUD_TOKEN" };
   if (e.MODEL_API_KEY) return { agentProvider: e.AGENT_PROVIDER === "anthropic-http" ? "anthropic-http" : "openai-http", modelName: name,
     modelApiUrl: endpoint(e.MODEL_API_URL || "https://open.bigmodel.cn/api/paas/v4/chat/completions"), modelApiKey: e.MODEL_API_KEY, keyVariable: "MODEL_API_KEY" };
   // 凭据和接口必须成对使用，不把智谱 Token 发送到 Anthropic 官方接口。

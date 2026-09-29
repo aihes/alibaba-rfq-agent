@@ -89,7 +89,7 @@ export function parseImage(value) {
 
 export function validateAgent(body) {
   const query = body.query;
-  if (typeof query !== "string" || !query.trim() || query.length > 6000) {
+  if (typeof query !== "string" || !query.trim() || query.length > 50_000) {
     throw new ApiError(400, "invalid_query");
   }
   const sessionId = body.session_id == null ? crypto.randomUUID() : body.session_id;

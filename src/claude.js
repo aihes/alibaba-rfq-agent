@@ -1,5 +1,6 @@
 import path from "node:path";
 import { runLocalAgentJson } from "./local-agent.js";
+import { runCloudAgentJson } from "./cloud-agent.js";
 import { extractImageText } from "./ocr.js";
 import { extractJson, sanitizeRfqText } from "./utils.js";
 import { callModelHttp } from "./model-http.js";
@@ -191,10 +192,13 @@ function classificationPayload(rfq, supportedCategories, pricing) {
 export function buildClassificationRequest(config, rfq, supportedCategories) {
   const payload = classificationPayload(rfq, supportedCategories, config.pricing);
   const imagePaths = (rfq.imagePaths || []).slice(0, config.maxRfqImages);
-  // 只有本机 Claude Agent 具备 Read 工具；HTTP 模型只能使用已提取的 OCR 文本。
-  const agentImagePaths = config.agentProvider === "local-claude-sdk" && config.imageAnalysisMode === "agent-read" ? imagePaths : [];
+  const agentImagePaths = config.imageAnalysisMode === "agent-read"
+    ? config.agentProvider === "cloud-claude" ? imagePaths.slice(0, 2)
+      : config.agentProvider === "local-claude-sdk" ? imagePaths : [] : [];
   const imageInstructions = agentImagePaths.length
-    ? renderPrompt("image-read", { imagePaths: agentImagePaths.map((filePath) => `- ${filePath}`).join("\n") })
+    ? config.agentProvider === "cloud-claude"
+      ? renderPrompt("image-remote", { imagePaths: agentImagePaths.map((filePath, index) => `${index + 1}. ${filePath}`).join("\n") })
+      : renderPrompt("image-read", { imagePaths: agentImagePaths.map((filePath) => `- ${filePath}`).join("\n") })
     : imagePaths.length
       ? renderPrompt("image-ocr")
     : renderPrompt("image-none");
@@ -234,6 +238,12 @@ export async function classifyWithClaude(config, rfq, supportedCategories) {
     return { ...data, agent: meta };
   }
 
+  if (config.agentProvider === "cloud-claude") {
+    const { data, meta } = await runCloudAgentJson(config, { prompt: request.prompt,
+      imagePaths: request.agentImagePaths, phase: "classification" });
+    return { ...data, agent: meta };
+  }
+
   if (config.agentProvider === "anthropic-http") {
     const data = await callAnthropicHttp(config, request.systemPrompt, request.payload, 1600, { phase: "classification" });
     return { ...data, imageReadStatus: "not_provided", imageEvidence: [], agent: { provider: "anthropic-http", requestedModel: config.anthropicModel } };
@@ -263,6 +273,11 @@ export async function draftWithClaude(config, rfq, analysis, quote) {
 
   if (config.agentProvider === "local-claude-sdk") {
     const { data, meta } = await runLocalAgentJson(config, { prompt: request.prompt, schema: draftSchema, maxTurns: request.maxTurns, phase: "draft" });
+    return { ...data, agent: meta };
+  }
+
+  if (config.agentProvider === "cloud-claude") {
+    const { data, meta } = await runCloudAgentJson(config, { prompt: request.prompt, phase: "draft" });
     return { ...data, agent: meta };
   }
 
@@ -315,6 +330,11 @@ export async function explainQuoteWithClaude(config, rfq, analysis, quote) {
       maxTurns: request.maxTurns,
       phase: "rationale"
     });
+    return { request, output: data, agent: meta };
+  }
+
+  if (config.agentProvider === "cloud-claude") {
+    const { data, meta } = await runCloudAgentJson(config, { prompt: request.prompt, phase: "rationale" });
     return { request, output: data, agent: meta };
   }
 

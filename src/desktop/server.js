@@ -12,7 +12,7 @@ const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; cha
 const csp = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 function safeProbeError(error, environment) {
   let message = String(error?.message || "服务调用失败");
-  for (const key of ["MODEL_API_KEY", "GLM_OCR_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]) {
+  for (const key of ["MODEL_API_KEY", "RFQ_CLOUD_TOKEN", "GLM_OCR_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]) {
     if (environment[key]) message = message.replaceAll(environment[key], "[redacted]");
   }
   return message.slice(0, 250);
@@ -27,7 +27,7 @@ function contained(file, directory) {
  * 操作。所有证据文件由 catalog 白名单选取，客户端不能指定绝对路径。
  */
 export async function createCaseServer(options) {
-  const { resources, workspace, port = 0, desktopSettings, importData, importBrowserLogin, openClaudeSetup, testLocalClaude, testOcr, notify, notifyToken, toolToken, embeddedBrowser, browserToken } = options;
+  const { resources, workspace, port = 0, desktopSettings, importData, importBrowserLogin, openClaudeSetup, testLocalClaude, testCloudAgent, testOcr, notify, notifyToken, toolToken, embeddedBrowser, browserToken } = options;
   const console = new OperatorConsole(options);
   const tools = createNotificationTools({ workspace, file: console.settingsFile,
     ...(notify ? { send: notify } : {}) });
@@ -177,6 +177,13 @@ export async function createCaseServer(options) {
                 schema: { type: "object", additionalProperties: false, required: ["ok"], properties: { ok: { type: "boolean" } } } });
               data = sdk.data;
             }
+          } else if (v.agentProvider === "cloud-claude") {
+            const env = desktopSettings.environment();
+            if (!env.RFQ_CLOUD_TOKEN) throw new Error("请在设置中填写云端服务授权令牌");
+            if (testCloudAgent) data = await testCloudAgent(env);
+            else data = (await (await import("../cloud-agent.js")).runCloudAgentJson({
+              cloudAgentToken: env.RFQ_CLOUD_TOKEN, cloudAgentUrl: env.RFQ_CLOUD_AGENT_URL
+            }, { prompt: 'Return exactly this JSON object and nothing else: {"ok":true}', phase: "connection-test" })).data;
           } else if (v.agentProvider === "anthropic-http") data = await (await import("../claude.js"))
             .callAnthropicHttp({ anthropicApiKey: v.modelApiKey, anthropicModel: v.modelName, anthropicApiUrl: v.modelApiUrl }, "Return JSON only: {\"ok\":true}", { test: true }, 256);
           else data = await callModelHttp({ modelApiKey: v.modelApiKey, modelApiUrl: v.modelApiUrl, modelName: v.modelName }, "Return JSON only: {\"ok\":true}", { test: true }, 256);
@@ -193,7 +200,7 @@ export async function createCaseServer(options) {
           try {
             const env = desktopSettings.environment();
             if (env.OCR_PROVIDER === "off") throw new Error("图片识别已关闭，请先在设置中开启");
-            if (!env.GLM_OCR_API_KEY) throw new Error("未配置 GLM OCR API Key，请检查设置或本机环境变量");
+            if (!env.GLM_OCR_API_KEY) throw new Error(env.OCR_PROVIDER === "cloud-ocr" ? "未配置云端服务授权令牌" : "未配置 GLM OCR API Key，请检查设置或本机环境变量");
             let ocr;
             if (testOcr) ocr = await testOcr(env);
             else {

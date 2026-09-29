@@ -25,6 +25,12 @@ test("agent validates session ids and limits images", () => {
     (error) => error instanceof ApiError && error.code === "invalid_images");
 });
 
+test("agent accepts a full RFQ classification prompt but rejects oversized text", () => {
+  assert.equal(validateAgent({ query: "x".repeat(12_000) }).query.length, 12_000);
+  assert.throws(() => validateAgent({ query: "x".repeat(50_001) }),
+    (error) => error instanceof ApiError && error.code === "invalid_query");
+});
+
 test("request body limit is enforced even without a Content-Length header", async () => {
   const request = new Request("https://example.com/v1/agent", { method: "POST",
     headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: "long" }) });

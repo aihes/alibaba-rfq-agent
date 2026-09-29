@@ -2,11 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { findLocalClaudeExecutable, pickModelEnvironment, resolveEnvironmentModel } from "./model-environment.js";
 import { glmApiOrigin, glmOcrUrl, resolveGlmCredential, DEFAULT_GLM_OCR_URL } from "../glm-credentials.js";
+import { cloudEndpoint } from "../cloud-agent.js";
 
 export const defaults = {
-  modelConfigSource: "auto", agentProvider: "local-claude-sdk", modelName: "glm-5.3",
-  modelApiUrl: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-  ocrProvider: "glm-ocr", ocrApiUrl: DEFAULT_GLM_OCR_URL,
+  modelConfigSource: "auto", agentProvider: "cloud-claude", modelName: "glm-5.3",
+  modelApiUrl: "https://glm.knowflow.work/v1/agent",
+  ocrProvider: "cloud-ocr", ocrApiUrl: "https://glm.knowflow.work/v1/ocr",
   quotePort: "", pollIntervalSeconds: "600"
 };
 const secrets = ["modelApiKey", "ocrApiKey"];
@@ -27,11 +28,24 @@ export class DesktopSettings {
       const saved = JSON.parse(fs.readFileSync(this.file, "utf8"));
       for (const key of Object.keys(defaults)) if (typeof saved[key] === "string") this.value[key] = saved[key];
       for (const key of secrets) if (saved[key]) this.value[key] = encryption.decryptString(Buffer.from(saved[key], "base64"));
+      // An untouched automatic local-Claude selection follows the new cloud
+      // default. Explicit manual or environment selections remain unchanged.
+      if ((!saved.modelConfigSource || saved.modelConfigSource === "auto") && saved.agentProvider === "local-claude-sdk" && !saved.modelApiKey) {
+        this.value.agentProvider = "cloud-claude";
+        this.value.modelApiUrl = defaults.modelApiUrl;
+        if (saved.ocrProvider === "glm-ocr" && !saved.ocrApiKey && (!saved.ocrApiUrl || saved.ocrApiUrl === DEFAULT_GLM_OCR_URL)) {
+          this.value.ocrProvider = "cloud-ocr"; this.value.ocrApiUrl = defaults.ocrApiUrl;
+        }
+      }
       // 0.7.3 保存过空密钥的旧默认设置时，升级到新默认；用户明确
       // 配置过 HTTP、模型名或密钥则保留原选择。
       if ((!saved.modelConfigSource || saved.modelConfigSource === "auto") && saved.agentProvider === "openai-http"
         && saved.modelName === "glm-4.7" && !saved.modelApiKey) {
         this.value.agentProvider = defaults.agentProvider; this.value.modelName = defaults.modelName;
+        this.value.modelApiUrl = defaults.modelApiUrl;
+        if (saved.ocrProvider === "glm-ocr" && !saved.ocrApiKey && (!saved.ocrApiUrl || saved.ocrApiUrl === DEFAULT_GLM_OCR_URL)) {
+          this.value.ocrProvider = "cloud-ocr"; this.value.ocrApiUrl = defaults.ocrApiUrl;
+        }
       }
       if (secrets.some((key) => saved[key])) this.encryptedStorage = true;
     }
@@ -41,11 +55,14 @@ export class DesktopSettings {
     try { local = resolveEnvironmentModel(this.localEnvironment.variables); }
     catch { error = "本机模型地址格式无效，请检查环境变量或改用手动配置"; }
     const claudeExecutable = this.detectClaude({ ...this.localEnvironment.claudeVariables, ...this.localEnvironment.variables });
-    const useLocal = this.value.modelConfigSource === "environment" || (this.value.modelConfigSource === "auto" && !this.value.modelApiKey && local
-      && (this.value.agentProvider !== "local-claude-sdk" || !claudeExecutable));
+    const cloudToken = pickModelEnvironment(this.localEnvironment.variables).RFQ_CLOUD_TOKEN || "";
+    const useLocal = this.value.modelConfigSource === "environment" || (this.value.modelConfigSource === "auto" && this.value.agentProvider !== "cloud-claude"
+      && !this.value.modelApiKey && local && (this.value.agentProvider !== "local-claude-sdk" || !claudeExecutable));
+    const cloud = !useLocal && this.value.agentProvider === "cloud-claude" && !this.value.modelApiKey && cloudToken;
     return { value: useLocal ? { ...this.value, agentProvider: local?.agentProvider || defaults.agentProvider, modelName: local?.modelName || defaults.modelName,
-      modelApiUrl: local?.modelApiUrl || defaults.modelApiUrl, modelApiKey: local?.modelApiKey || "" } : this.value,
-      source: useLocal ? "environment" : this.value.agentProvider === "local-claude-sdk" ? "local-claude" : "manual", local, error, claudeExecutable };
+      modelApiUrl: local?.modelApiUrl || defaults.modelApiUrl, modelApiKey: local?.modelApiKey || "" }
+      : cloud ? { ...this.value, modelApiKey: cloudToken } : this.value,
+      source: useLocal ? "environment" : cloud ? "environment" : this.value.agentProvider === "local-claude-sdk" ? "local-claude" : "manual", local, error, claudeExecutable };
   }
   async refreshEnvironment() {
     if (!this.reloadEnvironment) throw new Error("当前运行方式不支持重新读取环境变量");
@@ -54,6 +71,14 @@ export class DesktopSettings {
   }
   ocrConfiguration(resolved = this.resolved()) {
     const e = pickModelEnvironment(this.localEnvironment.variables);
+    if (this.value.ocrProvider === "cloud-ocr") {
+      const url = this.value.ocrApiUrl;
+      const model = resolved.value;
+      const shared = model.agentProvider === "cloud-claude" && new URL(model.modelApiUrl).origin === new URL(url).origin
+        ? model.modelApiKey || "" : "";
+      return { apiKey: this.value.ocrApiKey || shared, apiUrl: url,
+        source: this.value.ocrApiKey ? "saved-ocr" : shared ? "cloud-model" : "missing" };
+    }
     const c = pickModelEnvironment(this.localEnvironment.claudeVariables || {});
     const configuredUrl = e.GLM_OCR_API_URL || this.value.ocrApiUrl;
     if (this.value.ocrApiKey) return { apiKey: this.value.ocrApiKey, apiUrl: this.value.ocrApiUrl, source: "saved-ocr" };
@@ -71,8 +96,8 @@ export class DesktopSettings {
 
     // The default URL follows the key's official platform. An explicit OCR URL
     // may only inherit a shared key if it stays on that same origin.
-    const customUrl = (e.GLM_OCR_API_URL && e.GLM_OCR_API_URL !== defaults.ocrApiUrl ? e.GLM_OCR_API_URL : "")
-      || (this.value.ocrApiUrl !== defaults.ocrApiUrl ? this.value.ocrApiUrl : "");
+    const customUrl = (e.GLM_OCR_API_URL && e.GLM_OCR_API_URL !== DEFAULT_GLM_OCR_URL ? e.GLM_OCR_API_URL : "")
+      || (this.value.ocrApiUrl !== DEFAULT_GLM_OCR_URL ? this.value.ocrApiUrl : "");
     if (customUrl && glmApiOrigin(customUrl) !== shared.origin) return { apiKey: "", apiUrl: customUrl, source: "endpoint-mismatch" };
     return { apiKey: shared.apiKey, apiUrl: customUrl || glmOcrUrl(shared.origin), source: shared.source,
       keyVariable: shared.keyVariable };
@@ -103,7 +128,7 @@ export class DesktopSettings {
       if (!Array.isArray(changes.clearSecrets) || changes.clearSecrets.some((key) => !secrets.includes(key))) throw new Error("密钥删除参数无效");
       for (const key of changes.clearSecrets) delete next[key];
     }
-    if (!["auto", "environment", "manual"].includes(next.modelConfigSource) || !["local-claude-sdk", "openai-http", "anthropic-http"].includes(next.agentProvider) || !["glm-ocr", "off"].includes(next.ocrProvider) || !next.modelName) throw new Error("请选择支持的模型服务");
+    if (!["auto", "environment", "manual"].includes(next.modelConfigSource) || !["cloud-claude", "local-claude-sdk", "openai-http", "anthropic-http"].includes(next.agentProvider) || !["cloud-ocr", "glm-ocr", "off"].includes(next.ocrProvider) || !next.modelName) throw new Error("请选择支持的模型服务");
     for (const key of ["modelApiUrl", "ocrApiUrl"]) {
       const url = new URL(next[key]);
       if (url.protocol !== "https:" || url.username || url.password || url.hash) throw new Error("模型服务地址必须是 HTTPS 且不包含登录凭据");
@@ -113,6 +138,8 @@ export class DesktopSettings {
       if (url.origin !== new URL(this.value[key]).origin && !changes[secret]?.trim()) delete next[secret];
     }
     if (next.agentProvider === "anthropic-http" && !new URL(next.modelApiUrl).pathname.endsWith("/v1/messages")) throw new Error("Anthropic 兼容接口地址须以 /v1/messages 结尾");
+    if (next.agentProvider === "cloud-claude") cloudEndpoint(next.modelApiUrl);
+    if (next.ocrProvider === "cloud-ocr") cloudEndpoint(next.ocrApiUrl, "/v1/ocr");
     if (!/^\d+$/.test(next.pollIntervalSeconds) || Number(next.pollIntervalSeconds) < 60 || Number(next.pollIntervalSeconds) > 86400) throw new Error("监控间隔必须为 60–86400 秒");
     if (secrets.some((key) => next[key])) {
       this.encryptedStorage = this.encryption.isEncryptionAvailable();
@@ -131,13 +158,16 @@ export class DesktopSettings {
       c = pickModelEnvironment(this.localEnvironment.claudeVariables || {}), localClaude = v.agentProvider === "local-claude-sdk",
       claudeAuth = (c.ANTHROPIC_AUTH_TOKEN || c.ANTHROPIC_API_KEY) && c.ANTHROPIC_BASE_URL ? c : e,
       ocr = this.ocrConfiguration(resolved);
+    const cloudClaude = v.agentProvider === "cloud-claude";
     return { AGENT_PROVIDER: v.agentProvider, MODEL_NAME: v.modelName, MODEL_API_URL: v.modelApiUrl,
       RFQ_MODEL_CONFIG_SOURCE: resolved.source === "environment" ? this.localEnvironment.source : localClaude ? "本机 Claude" : "已保存配置",
       MODEL_API_KEY: localClaude ? "" : v.modelApiKey || "",
+      RFQ_CLOUD_TOKEN: cloudClaude ? v.modelApiKey || "" : "",
+      RFQ_CLOUD_AGENT_URL: cloudClaude ? v.modelApiUrl : "",
       ...(localClaude ? { ...((!claudeAuth.ANTHROPIC_AUTH_TOKEN && claudeAuth.ANTHROPIC_API_KEY) ? { ANTHROPIC_API_KEY: claudeAuth.ANTHROPIC_API_KEY } : {}),
         ...((claudeAuth.ANTHROPIC_AUTH_TOKEN) ? { ANTHROPIC_AUTH_TOKEN: claudeAuth.ANTHROPIC_AUTH_TOKEN } : {}),
         ...((claudeAuth.ANTHROPIC_BASE_URL) ? { ANTHROPIC_BASE_URL: claudeAuth.ANTHROPIC_BASE_URL } : {}) }
-        : { ANTHROPIC_API_KEY: v.modelApiKey || "", ANTHROPIC_HTTP_MODEL: v.modelName, ANTHROPIC_API_URL: v.modelApiUrl }),
+        : cloudClaude ? {} : { ANTHROPIC_API_KEY: v.modelApiKey || "", ANTHROPIC_HTTP_MODEL: v.modelName, ANTHROPIC_API_URL: v.modelApiUrl }),
       LOCAL_CLAUDE_EXECUTABLE: localClaude ? resolved.claudeExecutable : "",
       // 界面中显示的模型名就是 SDK 实际请求的模型。用户级 Claude
       // 默认模型可能指向别的服务或上下文变体，不覆盖本应用的选择。
@@ -146,7 +176,8 @@ export class DesktopSettings {
       // 额外指令；这些会改变报价任务的回合数与执行边界。
       LOCAL_CLAUDE_SETTING_SOURCES: "none",
       OCR_PROVIDER: v.ocrProvider, GLM_OCR_API_URL: ocr.apiUrl, GLM_OCR_API_KEY: ocr.apiKey,
-      IMAGE_ANALYSIS_MODE: "local-ocr", USE_CLAUDE: "true", USE_CLAUDE_DRAFT: "true",
+      RFQ_CLOUD_OCR_TOKEN: v.ocrProvider === "cloud-ocr" ? ocr.apiKey : "",
+      IMAGE_ANALYSIS_MODE: cloudClaude ? "agent-read" : "local-ocr", USE_CLAUDE: "true", USE_CLAUDE_DRAFT: "true",
       QUOTE_PORT: v.quotePort, POLL_INTERVAL_SECONDS: v.pollIntervalSeconds };
   }
 }

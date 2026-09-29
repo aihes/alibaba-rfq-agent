@@ -1,6 +1,6 @@
 {
   "name": "alibaba-rfq-agent",
-  "version": "0.7.20",
+  "version": "0.7.21",
   "private": true,
   "type": "module",
   "description": "Alibaba RFQ desktop assistant with an isolated embedded Chromium browser, guarded pricing and quote review.",
@@ -18,7 +18,7 @@
     "cases:build": "node scripts/build_case_catalog.mjs",
     "cases:up": "npm run cases:build && npm run cases:serve",
     "cases:serve": "node scripts/serve_case_catalog.mjs",
-    "test": "node --test",
+    "test": "node --test tests/*.test.js cloudflare/claude-code-probe/src/*.test.js",
     "midscene:status": "node plugins/alibaba-rfq-midscene/scripts/cli.mjs status",
     "midscene:scan": "node plugins/alibaba-rfq-midscene/scripts/cli.mjs scan",
     "midscene:analyze": "node plugins/alibaba-rfq-midscene/scripts/cli.mjs analyze",

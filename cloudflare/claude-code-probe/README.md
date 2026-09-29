@@ -2,7 +2,7 @@
 
 This Worker exposes authenticated agent and OCR APIs while retaining the earlier
 fixed Claude Code probe. API keys stay in Cloudflare secrets; the RFQ desktop app
-has not yet been switched to these remote APIs. It is deployed at `https://glm.knowflow.work/` and
+uses these remote APIs by default. It is deployed at `https://glm.knowflow.work/` and
 `https://claude-probe.knowflow.work/` on the account with Containers access.
 
 The Worker uses the public `node:22-slim` image. On the first authorized
@@ -27,8 +27,7 @@ starting the container. The model key is passed to the Claude process as an
 environment variable for that invocation and is never placed in command
 arguments or a response.
 
-The current RFQ desktop app invokes a local Claude executable and does not yet
-call this Worker.
+The desktop app saves its client token in encrypted local settings.
 
 ## Service API
 
@@ -36,7 +35,8 @@ All requests use HTTPS and JSON. The service is currently for the owner's use:
 both APIs require a client token. The service stores only its SHA-256 hash and
 can revoke it. Never bundle `PROBE_TOKEN`, `GLM_API_KEY`, or
 `SERVICE_GLM_API_KEY` in an installer. If the desktop app is distributed later,
-issue a distinct client token for each installation.
+issue a distinct client token for each installation. The desktop app accepts the
+token under Settings → Model service; cloud OCR reuses it.
 
 `POST /v1/agent` accepts a `query`, an optional `session_id`, and up to two
 `images`. The Worker forwards the query and original image blocks directly to
@@ -68,7 +68,8 @@ Content-Type: application/json
 {"image":{"mime_type":"image/png","data":"<base64>"}}
 ```
 
-Images must contain actual PNG or JPEG bytes, at most 3 MiB each. Base64 data
+Agent queries can contain up to 50,000 characters. Images must contain actual
+PNG or JPEG bytes, at most 3 MiB each. Base64 data
 URIs are also accepted. URLs are not accepted. The maximum JSON request body
 is 9 MiB. Client limits default to 20 agent calls and 100 OCR images per UTC
 day, with bursts capped at 3 agent calls and 10 OCR images per minute. Agent
@@ -108,8 +109,7 @@ PNG. After the direct-Claude change, a text session resumed and replied
 image was added. The container then stopped, and another follow-up restored
 the native Claude Code transcript and replied `456`. A newly created token
 returned HTTP 401 after the administrator revoked it. These checks prove the
-remote API paths;
-they do not mean the desktop application has been integrated or tested with them.
+remote API paths; desktop integration is tested separately.
 The legacy fixed prompt was also retested after the shared-container change
 and returned `GLM_REMOTE_OK`.
 

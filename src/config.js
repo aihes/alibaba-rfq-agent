@@ -48,6 +48,8 @@ export function loadConfig() {
   // default as automatic so an inherited Z.AI key stays on api.z.ai.
   const customOcrUrl = process.env.GLM_OCR_API_URL && (process.env.GLM_OCR_API_URL !== DEFAULT_GLM_OCR_URL || process.env.GLM_OCR_API_KEY)
     ? process.env.GLM_OCR_API_URL : "";
+  const agentProvider = process.env.AGENT_PROVIDER || "cloud-claude";
+  const ocrProvider = process.env.OCR_PROVIDER || (agentProvider === "cloud-claude" ? "cloud-ocr" : "glm-ocr");
   const localClaudeExecutable = firstExisting([
     process.env.LOCAL_CLAUDE_EXECUTABLE,
     path.join(os.homedir(), ".claude/local/claude"),
@@ -69,7 +71,10 @@ export function loadConfig() {
     electronBrowserUrl: process.env.RFQ_BROWSER_URL || "",
     electronBrowserToken: process.env.RFQ_BROWSER_TOKEN || "",
     chromeBridgeTimeoutMs: Number(process.env.CHROME_BRIDGE_TIMEOUT_MS || 20000),
-    agentProvider: process.env.AGENT_PROVIDER || "local-claude-sdk",
+    agentProvider,
+    cloudAgentToken: process.env.RFQ_CLOUD_TOKEN || "",
+    cloudAgentUrl: process.env.RFQ_CLOUD_AGENT_URL || "https://glm.knowflow.work/v1/agent",
+    cloudAgentTimeoutMs: Number(process.env.RFQ_CLOUD_TIMEOUT_MS || 210000),
     localClaudeExecutable,
     localClaudeModel: process.env.LOCAL_CLAUDE_MODEL || "",
     localClaudeSettingSources: parseList(process.env.LOCAL_CLAUDE_SETTING_SOURCES, []),
@@ -87,11 +92,12 @@ export function loadConfig() {
     modelName: process.env.MODEL_NAME || "glm-5.3",
     useClaude: process.env.USE_CLAUDE !== "false",
     useClaudeDraft: process.env.USE_CLAUDE_DRAFT !== "false",
-    imageAnalysisMode: process.env.IMAGE_ANALYSIS_MODE || "local-ocr",
-    ocrProvider: process.env.OCR_PROVIDER || "glm-ocr",
-    ocrApiKey: process.env.GLM_OCR_API_KEY || glmCredential?.apiKey || "",
-    ocrApiUrl: customOcrUrl || (process.env.GLM_OCR_API_KEY ? DEFAULT_GLM_OCR_URL
-      : glmOcrUrl(glmCredential?.origin || "https://open.bigmodel.cn")),
+    imageAnalysisMode: process.env.IMAGE_ANALYSIS_MODE || (agentProvider === "cloud-claude" ? "agent-read" : "local-ocr"),
+    ocrProvider,
+    ocrApiKey: ocrProvider === "cloud-ocr" ? process.env.RFQ_CLOUD_OCR_TOKEN || process.env.RFQ_CLOUD_TOKEN || ""
+      : process.env.GLM_OCR_API_KEY || glmCredential?.apiKey || "",
+    ocrApiUrl: ocrProvider === "glm-ocr" ? customOcrUrl || (process.env.GLM_OCR_API_KEY ? DEFAULT_GLM_OCR_URL
+      : glmOcrUrl(glmCredential?.origin || "https://open.bigmodel.cn")) : "https://glm.knowflow.work/v1/ocr",
     ocrTimeoutMs: Number(process.env.OCR_TIMEOUT_MS || 60000),
     maxRfqImages: Number(process.env.MAX_RFQ_IMAGES || 4),
     maxImageBytes: Number(process.env.MAX_IMAGE_BYTES || 5 * 1024 * 1024),

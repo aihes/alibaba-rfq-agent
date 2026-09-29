@@ -51,17 +51,20 @@ function renderModelSettings(settings) {
   $('#quote-port').value = settings.quotePort || '';
   $('#poll-interval').value = settings.pollIntervalSeconds || '600';
   $('#model-api-key').value = ''; $('#ocr-api-key').value = '';
-  $('#model-environment-status').textContent = settings.environmentError || (settings.agentProvider === 'local-claude-sdk'
+  $('#model-environment-status').textContent = settings.environmentError || (settings.agentProvider === 'cloud-claude'
+    ? '云端 Claude Code 无需本机安装；填写服务授权令牌后测试连接。文字使用 GLM-5.3，带图使用 Flash。'
+    : settings.agentProvider === 'local-claude-sdk'
     ? settings.claudeExecutableAvailable ? '本机 Claude 已找到；使用本机 GLM 认证变量，不加载 Claude 用户级插件或 hooks。' : '尚未找到本机 Claude。可安装 Claude，或选择 GLM HTTP 接口。'
     : settings.environmentModelAvailable
       ? `检测到 ${settings.environmentSource} · ${settings.environmentKeyVariable}。${settings.effectiveModelSource === 'environment' ? '当前正在使用，密钥仅留在内存中。' : '当前优先使用手动保存的配置。'}`
       : '未检测到可用模型环境变量；可以重新读取或选择手动填写。');
-  $('#model-settings-status').textContent = `${settings.agentProvider === 'local-claude-sdk' ? settings.claudeExecutableAvailable ? '本机 Claude 已找到，请测试连接' : '本机 Claude 尚未找到' : `模型${settings.modelKeyConfigured ? settings.effectiveModelSource === 'environment' ? '使用本机环境变量' : '密钥已保存' : '未配置'}`} · OCR 密钥${settings.ocrKeyConfigured ? '可用' : '未配置'}${settings.encryptedStorage === true ? ' · 已保存密钥在本机加密' : settings.encryptedStorage === false ? ' · 系统密钥加密当前不可用' : ''}`;
+  $('#model-settings-status').textContent = `${settings.agentProvider === 'local-claude-sdk' ? settings.claudeExecutableAvailable ? '本机 Claude 已找到，请测试连接' : '本机 Claude 尚未找到' : `模型${settings.modelKeyConfigured ? settings.effectiveModelSource === 'environment' ? '使用本机环境变量' : '令牌已保存' : '未配置'}`} · OCR 授权${settings.ocrKeyConfigured ? '可用' : '未配置'}${settings.encryptedStorage === true ? ' · 已保存密钥在本机加密' : settings.encryptedStorage === false ? ' · 系统密钥加密当前不可用' : ''}`;
   const ocrSource = {
     'saved-ocr': '使用单独保存的 OCR Key', 'environment-ocr': '使用本机 GLM_OCR_API_KEY',
     'saved-model': '复用已保存的智普模型 Key', 'environment-model': `复用本机 ${settings.ocrKeyVariable || '智普模型'} Key`,
+    'cloud-model': '复用云端服务令牌',
     'endpoint-mismatch': 'OCR 接口与智普 Key 所属平台不一致，请调整地址或单独填写 OCR Key',
-    missing: '未找到可复用的智普 Key'
+    missing: '未找到可用的 OCR 授权'
   }[settings.ocrKeySource] || '未配置';
   $('#ocr-key-status').textContent = `${ocrSource}。实际接口：${settings.effectiveOcrApiUrl || settings.ocrApiUrl}。环境变量密钥只在本机内存中使用。`;
   syncModelSource();
@@ -70,9 +73,11 @@ function syncModelSource() {
   const source = $('#model-config-source').value;
   const inherited = source === 'environment' || (source === 'auto' && desktopInfo?.settings?.effectiveModelSource === 'environment');
   const localClaude = !inherited && $('#model-provider').value === 'local-claude-sdk';
-  for (const id of ['#model-provider', '#model-name']) $(id).disabled = inherited;
+  const cloudClaude = !inherited && $('#model-provider').value === 'cloud-claude';
+  $('#model-provider').disabled = inherited;
+  $('#model-name').disabled = inherited || cloudClaude;
   for (const id of ['#model-api-url', '#model-api-key']) $(id).disabled = inherited || localClaude;
-  $('#model-api-key').placeholder = inherited ? '从本机环境变量读取，不回显密钥' : localClaude ? '本机 Claude 管理凭据，无需填写' : '留空保留已有密钥';
+  $('#model-api-key').placeholder = inherited ? '从本机环境变量读取，不回显密钥' : localClaude ? '本机 Claude 管理凭据，无需填写' : cloudClaude ? '填写云端服务授权令牌；留空保留已有令牌' : '留空保留已有密钥';
 }
 async function loadDesktop() {
   try {
@@ -106,10 +111,18 @@ async function loadDesktop() {
       // 用户显式选择调用方式后退出“自动”，避免保存时又被环境 HTTP
       // 优先级覆盖，造成界面选了 Claude / HTTP 却运行另一种方式。
       if ($('#model-config-source').value === 'auto') $('#model-config-source').value = 'manual';
-      const anthropic = $('#model-provider').value === 'anthropic-http';
-      if ($('#model-provider').value !== 'local-claude-sdk') $('#model-api-url').value = anthropic ? 'https://api.anthropic.com/v1/messages' : 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+      const provider = $('#model-provider').value;
+      if (provider !== 'local-claude-sdk') $('#model-api-url').value = provider === 'cloud-claude' ? 'https://glm.knowflow.work/v1/agent'
+        : provider === 'anthropic-http' ? 'https://api.anthropic.com/v1/messages' : 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+      if (provider === 'cloud-claude' && $('#ocr-provider').value === 'glm-ocr') {
+        $('#ocr-provider').value = 'cloud-ocr'; $('#ocr-api-url').value = 'https://glm.knowflow.work/v1/ocr';
+      }
       if (!$('#model-name').value.trim()) $('#model-name').value = 'glm-5.3';
       syncModelSource();
+    });
+    $('#ocr-provider').addEventListener('change', () => {
+      $('#ocr-api-url').value = $('#ocr-provider').value === 'cloud-ocr' ? 'https://glm.knowflow.work/v1/ocr'
+        : 'https://open.bigmodel.cn/api/paas/v4/layout_parsing';
     });
     $('#model-settings-form').addEventListener('submit', async (event) => {
       event.preventDefault(); $('#model-save').disabled = true;
