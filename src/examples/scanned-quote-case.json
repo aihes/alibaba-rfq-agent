@@ -1,0 +1,43 @@
+{
+  "id": "example-carton-rfq-20260917",
+  "createdAt": "2026-09-17T18:49:55.853Z",
+  "updatedAt": "2026-09-17T18:49:55.853Z",
+  "rfq": {
+    "id": "example-carton-rfq-20260917",
+    "title": "Cardboard Carton Box Corrugated Cartons Mailing Moving Shipping Boxes",
+    "summary": "买家询问 500 个纸箱，尺寸约 31 × 23.5 × 16.5 cm，希望获得价格。",
+    "detailText": "I need carton boxes. The size 31 × 23.5 × 16.5 cm, quantity 500 pieces. Please let me know the pricing.\n\n原始页面还包含大段商品模板描述；买家身份和原始链接已从内置案例中移除。",
+    "quantityText": "500 Piece/Pieces",
+    "collectedAt": "2026-09-17T18:47:06.834Z",
+    "publishedText": "原记录未保存可核实的绝对发布时间"
+  },
+  "analysis": {
+    "categoryId": "corrugated_rsc",
+    "confidence": 0.92,
+    "recommendation": "review",
+    "fields": { "quantity": 500, "lengthMm": 310, "widthMm": 235, "heightMm": 165 },
+    "missingRequired": ["纸板材质与克重", "楞型", "是否需要印刷"],
+    "buyerQuestions": ["请确认纸板结构和楞型。", "需要哪种纸板材质或等级？", "是否需要印刷或商标？"],
+    "riskFlags": ["原始详情混入供应商商品模板，不能将模板中的材质、认证与交期当成买家已确认的要求。"]
+  },
+  "quote": {
+    "status": "conditional_quote",
+    "currency": "USD",
+    "quantity": 500,
+    "unitPriceUsd": 0.99,
+    "setupUsd": 0,
+    "totalUsd": 495,
+    "tradeTerm": "EXW",
+    "basis": "按 C01/0201 RSC 纸箱、310 × 235 × 165 mm、三层 B 楞牛皮纸板、无印刷的假设计算；真实规格仍需买家确认。",
+    "missingFields": ["材质", "楞型", "印刷要求"]
+  },
+  "draft": {
+    "productName": "Corrugated Cardboard Shipping Boxes",
+    "productDetails": "RSC 纸箱，310 × 235 × 165 mm。价格以三层 B 楞牛皮纸板、原色无印刷为前提，尚需确认材质和印刷要求。",
+    "buyerMessage": "Thank you for your RFQ for 500 cardboard shipping boxes. Our indicative quotation is USD 0.99 per piece, or USD 495 for 500 pieces, on an EXW basis. This price assumes plain 3-ply B-flute kraft board and excludes freight and taxes. Please confirm the board grade, flute type and whether printing is needed before we finalize the price.",
+    "port": "交货地点未核实"
+  },
+  "submission": { "status": "skipped" },
+  "hasDraft": true,
+  "images": []
+}

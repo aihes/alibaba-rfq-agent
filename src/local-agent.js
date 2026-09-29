@@ -3,6 +3,7 @@ import path from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { projectDir } from "./config.js";
 import { extractJson } from "./utils.js";
+import { recordModelUsage } from "./model-usage.js";
 
 const DISALLOWED_TOOLS = [
   "Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent", "Skill"
@@ -16,7 +17,8 @@ export async function runLocalAgentJson(config, {
   prompt,
   schema,
   imagePaths = [],
-  maxTurns = 1
+  maxTurns = 1,
+  phase = "unspecified"
 }) {
   if (!config.localClaudeExecutable) {
     throw new Error("Local Claude executable was not found. Set LOCAL_CLAUDE_EXECUTABLE.");
@@ -67,6 +69,9 @@ export async function runLocalAgentJson(config, {
     }
   } finally {
     clearTimeout(timeout);
+    recordModelUsage({ provider: "local-claude-sdk", model: config.localClaudeModel || "inherit-local-default",
+      phase, status: finalResult?.subtype === "success" && !finalResult?.is_error ? "success" : "failed",
+      usage: finalResult?.usage, reportedCostUsd: finalResult?.total_cost_usd });
   }
 
   if (!finalResult) throw new Error("Local Claude Agent SDK returned no result");

@@ -51,6 +51,12 @@ class ElectronPage {
     if (output) { fs.mkdirSync(path.dirname(output), { recursive: true }); fs.writeFileSync(output, bytes); }
     return bytes;
   }
+  async screenshotElement(selector, index, { path: output } = {}) {
+    const { data } = await this.call("elementScreenshot", { selector, index, expectedUrl: this.currentUrl });
+    const bytes = Buffer.from(data, "base64");
+    if (output) { fs.mkdirSync(path.dirname(output), { recursive: true }); fs.writeFileSync(output, bytes); }
+    return bytes;
+  }
   context() {
     // 图片下载沿用原有无登录凭据 HTTP 路径，来源和大小由 images.js 校验。
     return { request: { get: async (url, { timeout = 20000 } = {}) => {

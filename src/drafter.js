@@ -8,12 +8,28 @@ const names = {
 
 export function draftLocally(rfq, analysis, quote) {
   const feeLine = quote.setupUsd > 0 ? `One-time setup/testing charge: USD ${quote.setupUsd.toFixed(2)}. ` : "";
+  const unitPrice = Number(quote.unitPriceUsd).toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+  const exclusions = quote.priceEvidence?.kind === "operator_verified_sell_price"
+    ? "Freight and import tax are excluded. Samples and certification must be confirmed against the agreed specification."
+    : "International freight, tax and certification are excluded.";
+  const validThrough = quote.priceEvidence?.validThrough
+    ? `This offer is valid through ${quote.priceEvidence.validThrough}.`
+    : Number.isFinite(quote.validityDays) ? `This offer is valid for ${quote.validityDays} days.` : "";
   const questions = (analysis.buyerQuestions || []).slice(0, 3);
   const questionText = questions.length ? `\n\nPlease confirm:\n- ${questions.join("\n- ")}` : "";
+  const reviewedSpecs = quote.priceEvidence?.specReview?.entries || [];
+  const confirmed = reviewedSpecs.filter((entry) => entry.source === "buyer_confirmed")
+    .map((entry) => `${entry.field}: ${entry.value}`);
+  const proposed = reviewedSpecs.filter((entry) => entry.source === "supplier_proposal")
+    .map((entry) => `${entry.field}: ${entry.value}`);
+  const specText = [
+    confirmed.length ? `Buyer-confirmed specifications for this offer: ${confirmed.join("; ")}.` : "",
+    proposed.length ? `Our proposed specifications for this offer, subject to your acceptance: ${proposed.join("; ")}.` : ""
+  ].filter(Boolean).join(" ");
   return {
     productName: names[quote.categoryId] || rfq.title.slice(0, 120),
-    productDetails: `${quote.basis}. Quantity: ${quote.quantity} pcs. Indicative ${quote.tradeTerm} price: USD ${quote.unitPriceUsd.toFixed(3)}/pc. ${feeLine}International freight, tax and certification are excluded.`,
-    buyerMessage: `Hello,\n\nThank you for your RFQ. Based on the stated specification and quantity, our indicative ${quote.tradeTerm} offer is USD ${quote.unitPriceUsd.toFixed(3)} per piece for ${quote.quantity} pieces. ${feeLine}The indicative total is USD ${quote.totalUsd.toFixed(2)}. Freight, import tax, certification and sample courier costs are not included. Final production pricing is subject to artwork and specification confirmation.${questionText}\n\nBest regards,`,
+    productDetails: `${quote.basis}. ${specText} Quantity: ${quote.quantity} pcs. Indicative ${quote.tradeTerm} price: USD ${unitPrice}/pc. ${feeLine}${validThrough} ${exclusions}`,
+    buyerMessage: `Hello,\n\nThank you for your RFQ. Based on the specification below and quantity, our indicative ${quote.tradeTerm} offer is USD ${unitPrice} per piece for ${quote.quantity} pieces. ${specText} ${feeLine}The indicative total is USD ${quote.totalUsd.toFixed(2)}. ${validThrough} ${exclusions} Final production pricing is subject to artwork and specification confirmation.${questionText}\n\nBest regards,`,
     port: "",
     validityDays: quote.validityDays,
     sampleAvailable: false

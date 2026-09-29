@@ -3,6 +3,7 @@ import path from "node:path";
 import { projectDir } from "./config.js";
 import { fillQuoteForm, fillQuotePage, submissionToken } from "./form.js";
 import { ensureDataDirs } from "./utils.js";
+import { operatorMissingReviewed, operatorRisksReviewed } from "./quote-visibility.js";
 
 export const AUTO_CONTACT_ACK = "I_UNDERSTAND_AUTO_QUOTES_ARE_SENT";
 
@@ -51,11 +52,27 @@ export function evaluateAutoContact(config, record, contactState = { attempts: {
   if (!record?.rfq?.id || !record?.rfq?.quoteUrl) reasons.push("RFQ id or quote URL is missing");
   if (!allowedQuoteUrl(record?.rfq?.quoteUrl || "", config.autoContactAllowFixtureUrls)) reasons.push("Quote URL is outside the allowed Alibaba hosts");
   if (record?.quote?.status !== "quoted") reasons.push("Only non-conditional quoted records are eligible");
+  if (record?.quote?.priceEvidence?.kind === "operator_verified_sell_price") {
+    const expiry = Date.parse(`${record.quote.priceEvidence.validThrough}T23:59:59.999Z`);
+    if (record.quote.priceEvidence.rfqId !== record.rfq?.id || !Number.isFinite(expiry) || expiry < now.getTime())
+      reasons.push("Operator-approved price expired or belongs to another RFQ");
+  }
+  const missing = record?.analysis?.missingRequired || [];
+  const risks = record?.analysis?.riskFlags || [];
+  const missingReviewed = config.manualOperatorQuote === true && missing.length > 0 && operatorMissingReviewed(record);
+  const risksReviewed = config.manualOperatorQuote === true && risks.length > 0 && operatorRisksReviewed(record);
+  const humanReviewed = record?.quote?.priceEvidence?.kind === "operator_verified_sell_price" &&
+    (missing.length > 0 || risks.length > 0) &&
+    (!missing.length || missingReviewed) && (!risks.length || risksReviewed);
   if (!config.autoContactCategories?.includes(record?.analysis?.categoryId)) reasons.push("Category is not in AUTO_CONTACT_CATEGORIES");
-  if (Number(record?.analysis?.confidence || 0) < config.autoContactMinConfidence) reasons.push("Analysis confidence is below the automatic-contact threshold");
+  if (Number(record?.analysis?.confidence || 0) < config.autoContactMinConfidence && !humanReviewed)
+    reasons.push("Analysis confidence is below the automatic-contact threshold");
   if (record?.analysis?.recommendation !== "quote") reasons.push("Agent recommendation is not quote");
-  if ((record?.analysis?.missingRequired || []).length > 0) reasons.push("Required fields are missing");
-  if ((record?.analysis?.riskFlags || []).length > 0) reasons.push("Risk flags require human review");
+  if (missing.length > 0 && !missingReviewed) reasons.push("Required fields are missing");
+  // A documented operator review is accepted only for an explicitly started
+  // one-RFQ desktop quote. Background/watch runs never set this permission.
+  if (risks.length > 0 && !risksReviewed)
+    reasons.push("Risk flags require human review");
   if (!Number.isFinite(record?.rfq?.remainingQuotes) || record.rfq.remainingQuotes <= 0) reasons.push("Remaining quote slots are unknown or exhausted");
   if (!record?.draft?.buyerMessage) reasons.push("Buyer message is missing");
   if (!(record?.draft?.port || config.quotePort)) reasons.push("Verified QUOTE_PORT is missing");

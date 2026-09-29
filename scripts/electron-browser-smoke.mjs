@@ -37,7 +37,8 @@ app.whenReady().then(async () => {
         <p class="brh-rfq-item__country">Ukraine</p><p class="brh-rfq-item__quote-left">6</p><p class="brh-rfq-item__publishtime">15 minutes ago</p>
         <a href="/rfq_quotation_post.htm">Quote</a>
       </article><nav class="pagination"><a href="/rfq/rfq_search_list.htm?searchText=carton&page=2">Next</a></nav>
-      <div class="rfq-detail-info-body">Fixture B flute carton, 310x235x165mm</div>`);
+      <div class="rfq-detail-info-body">Fixture B flute carton, 310x235x165mm</div>
+      <div class="brh-at-item" style="width:120px;height:80px;background:#d26931">Fixture buyer attachment preview</div>`);
     const secondPage = html.replace("Fixture corrugated carton box", "Fixture second page carton box")
       .replace("p=fixture", "p=fixture-second").replace(/<nav class="pagination">.*?<\/nav>/, "");
     fixture = http.createServer((req, res) => { res.writeHead(200, { "Content-Type": "text/html" });
@@ -74,6 +75,17 @@ app.whenReady().then(async () => {
     assert.equal(cards[1].title, "Fixture second page carton box");
     const detail = await hydrateDetail(c.page, cards[0], { navigationDelayMs: 0, maxRfqImages: 0 });
     assert.match(detail.detailText, /310x235x165mm/);
+    // 图片 URL 不可用时，真实 Electron Chromium 仍能截取附件预览块；
+    // fixture 关闭 OCR，不会触发任何付费模型或外部网站。
+    const withAttachment = await hydrateDetail(c.page, cards[0], { navigationDelayMs: 0,
+      maxRfqImages: 1, maxImageBytes: 1024 * 1024, ocrProvider: "off" });
+    assert.equal(withAttachment.imageAssets.length, 1);
+    assert.equal(withAttachment.imageAssets[0].capture, "element-screenshot");
+    assert.ok(fs.statSync(withAttachment.imageAssets[0].filePath).size > 0);
+    if (process.argv.includes("--attachment-only")) {
+      console.log(JSON.stringify({ ok: true, workspace: root, attachmentCapture: "element-screenshot" }));
+      await cleanup(); app.quit(); return;
+    }
     const record = { rfq: { id: "electron-fixture", quoteUrl: home }, draft: { port: "Shanghai", productName: "Fixture carton", productDetails: "B flute", buyerMessage: "Local fixture quote only", sampleAvailable: false }, quote: { tradeTerm: "EXW", currency: "USD", quantity: 500, unitPriceUsd: 0.75, validityDays: 7 } };
     const filled = await fillQuotePage(c.page, config, record);
     assert.equal(filled.status, "filled_not_submitted"); assert.equal(filled.filledValues.unitPrice, "0.75");

@@ -6,6 +6,7 @@
     <meta name="color-scheme" content="light" />
     <title>CASE 档案 · Alibaba RFQ</title>
     <link rel="stylesheet" href="/styles.css" />
+    <script src="/price-csv.js" defer></script>
     <script src="/app.js" defer></script>
   </head>
   <body>
@@ -157,7 +158,7 @@
                 <label>监控品类<select id="ops-term"></select></label>
                 <label>最近 N 分钟内发布<input id="ops-recent-minutes" type="number" min="0" max="525600" step="1" value="60" inputmode="numeric" aria-describedby="scan-window-help"></label>
               </div>
-              <p id="scan-window-help" class="ops-help">读取搜索结果的全部页面；只分析发布时间在最近 N 分钟内的新 RFQ。填 0 表示不限发布时间。无法识别发布时间的 RFQ 只在不限时间时进入分析。</p>
+              <p id="scan-window-help" class="ops-help">读取搜索结果的全部页面；只分析发布时间在最近 N 分钟内的新 RFQ。填 0 表示不限发布时间。分析前先核对本地明确价格档位；无适用价格的需求跳过付费 OCR 和模型调用。每次运行最多分析 3 条，持续监控也共用此上限。只扫描 RFQ 不调用模型。</p>
               <div class="ops-actions">
                 <span class="ops-action-wrap"><button type="button" data-action="scan" class="light">只扫描 RFQ</button></span>
                 <span class="ops-action-wrap"><button type="button" data-action="once" class="primary">运行一轮分析</button></span>
@@ -200,37 +201,48 @@
             <details class="run-log-details"><summary>查看技术日志</summary><p id="run-log-summary" class="ops-help">遇到问题时可展开给开发人员排查；这里保留最近约 20 KB。</p><pre class="run-log" id="run-log">尚无运行日志。</pre></details>
           </div>
           <div class="quote-workbench">
-            <div class="section-heading"><div><span class="section-index">05 / QUOTE</span><h2>浏览器报价</h2></div><p id="quote-count">读取草稿中…</p></div>
-            <section id="submitted-quotes-section" class="submitted-quotes" aria-labelledby="submitted-quotes-title">
-              <div class="submitted-quotes-heading"><h3 id="submitted-quotes-title">已验证提交的报价</h3><small>仅展示已有明确规则报价，且 Alibaba 页面成功状态已核验的记录</small></div>
-              <div id="submitted-quote-list" class="submitted-quote-list"><p class="empty">正在读取已提交报价…</p></div>
+            <div class="section-heading"><div><span class="section-index">05 / QUOTE</span><h2>RFQ 报价</h2></div><p id="quote-count">读取记录中…</p></div>
+            <section class="quote-funnel" aria-labelledby="quote-funnel-title">
+              <div class="quote-funnel-heading"><h3 id="quote-funnel-title">报价可行性</h3><small>本机已保存的 RFQ · 同一 RFQ 只取最新草稿</small></div>
+              <ol class="quote-funnel-steps">
+                <li><strong id="quote-funnel-analyzed">—</strong><span>已分析 RFQ</span></li>
+                <li><strong id="quote-funnel-recommended">—</strong><span>建议继续核价</span></li>
+                <li><strong id="quote-funnel-priority">—</strong><span>优先核价</span></li>
+                <li><strong id="quote-funnel-priced">—</strong><span>明确报价</span></li>
+                <li><strong id="quote-funnel-submitted">—</strong><span>已确认提交成功</span></li>
+              </ol>
+              <p id="quote-funnel-next" role="status">正在分析报价进度…</p>
             </section>
-            <section id="priced-quotes-section" class="submitted-quotes" aria-labelledby="priced-quotes-title">
-              <div class="submitted-quotes-heading"><h3 id="priced-quotes-title">明确报价</h3><small>须有规则确认的数量、单价、总价和完整拟回复；条件金额不计入</small></div>
-              <div id="priced-quote-list" class="submitted-quote-list"><p class="empty">正在读取报价金额…</p></div>
+            <div class="quote-list-heading"><div><h3 id="drafts-title">RFQ 报价记录</h3><p>列表包含不同报价准备程度和提交进度的 RFQ。选择记录查看买家原文、图片、价格依据与拟回复；历史价格仅供核价参考。</p></div><div class="quote-list-actions"><button type="button" id="quote-import-example">导入案例</button></div></div>
+            <section id="quote-example" class="quote-example" aria-labelledby="quote-example-title" hidden>
+              <div class="quote-example-heading"><div><span class="section-index">CASE PREVIEW</span><h3 id="quote-example-title">历史扫描案例 · 只读预览</h3><p id="quote-example-source" role="status"></p></div><button type="button" id="quote-example-close" aria-label="关闭案例预览">关闭预览 ×</button></div>
+              <div id="quote-example-detail" class="quote-detail"></div>
             </section>
-            <div class="quote-list-heading"><div><h3 id="drafts-title">明确报价草稿</h3><p>这里只显示规则价已确认且拟回复完整的 RFQ。待复核需求和条件报价保留在本地分析记录中，不进入报价列表。</p></div><button type="button" id="quote-show-archived" class="light">查看已移出草稿</button></div>
-            <div class="quote-filters" aria-label="筛选明确报价">
+            <div class="quote-filters" aria-label="筛选 RFQ 报价记录">
               <label class="quote-search">搜索需求或拟回复<input id="quote-search" type="search" placeholder="商品、RFQ ID、买家需求、回复内容" autocomplete="off" /></label>
-              <label>提交进度<select id="quote-status-filter"><option value="all">全部明确报价</option><option value="unsubmitted">未提交</option><option value="filled_not_submitted">已回填，未提交</option><option value="submitted">已验证提交</option></select></label>
+              <label>状态<select id="quote-status-filter"><option value="all">当前记录</option><option value="needs_review">待确认价格或规格</option><option value="conditional_quote">有金额，条件待确认</option><option value="definite">价格已确认，待审核</option><option value="filled_not_submitted">已填报价表，未提交</option><option value="submitted">已确认提交成功</option><option value="archived">已归档草稿</option></select></label>
               <label>品类<select id="quote-category-filter"><option value="all">全部品类</option></select></label>
               <label>生成起始日<input id="quote-date-from" type="date" /></label><label>生成截止日<input id="quote-date-to" type="date" /></label>
               <span id="quote-filter-count" role="status">—</span>
             </div>
             <details class="quote-status-help"><summary>这些状态是什么意思？</summary><dl>
-              <div><dt>明确规则报价</dt><dd>AI 提取的规格匹配本地价格规则，已有可核对的金额和拟回复；仍需人工核对实际供货条件。</dd></div>
-              <div><dt>未提交</dt><dd>已有明确报价，但尚无 Alibaba 成功提交的记录。</dd></div>
-              <div><dt>已回填，未提交</dt><dd>应用记录了浏览器表单回填，仍需核对页面并确认是否提交。</dd></div>
-              <div><dt>已验证提交</dt><dd>Alibaba 页面显示提交成功，且本地保存了提交状态。</dd></div>
-              <div><dt>需要人工复核 / 条件报价</dt><dd>规格或价格条件尚未确定；这两类分析结果不出现在本报价列表。</dd></div>
+              <div><dt>当前记录</dt><dd>显示当前工作列表中的记录；已归档草稿需单独筛选查看。</dd></div>
+              <div><dt>待确认价格或规格</dt><dd>已读到买家需求，但缺少本次 RFQ 可用的当前销售价格，或至少一项影响报价的关键规格未确定；可查看图片和历史线索，再人工核实。</dd></div>
+              <div><dt>有金额，条件待确认</dt><dd>已有金额，但仍依赖未确认的条件；不能直接提交。</dd></div>
+              <div><dt>价格已确认，待审核</dt><dd>规格匹配已批准价格规则，或这条 RFQ 的当前售价已由操作员核实；金额和拟回复完整，仍需逐单审核。</dd></div>
+              <div><dt>已填报价表，未提交</dt><dd>应用记录了浏览器表单回填，仍需核对页面并确认是否提交。</dd></div>
+              <div><dt>已确认提交成功</dt><dd>Alibaba 页面显示提交成功，且本地保存了提交状态。</dd></div>
+              <div><dt>已归档草稿</dt><dd>仅从当前工作列表移出，原始记录仍保存在本机。</dd></div>
             </dl></details>
+            <div class="price-opportunity-controls"><button type="button" id="price-opportunity-export" class="light">导出筛选中的待核价清单 CSV</button><button type="button" id="price-opportunity-import" class="light">读取已填清单 CSV</button><input id="price-opportunity-import-file" type="file" accept=".csv,text/csv" hidden /></div>
+            <p id="price-opportunity-export-status" class="price-opportunity-export-status" role="status">清单中的售价列留空；填写现价后可读取 CSV，逐条核对并保存本地草稿。</p>
             <div id="quote-workbench-grid" class="quote-workbench-grid">
-              <div class="quote-picker"><div class="list-head"><span id="quote-list-title">明确报价草稿</span><span>价格状态 / 生成时间</span></div><div id="quote-list" class="quote-list"></div></div>
-              <div class="quote-detail" id="quote-detail"><div class="empty">选择一条草稿，核对报价内容。</div></div>
+              <div class="quote-picker"><div class="list-head"><span id="quote-list-title">RFQ 记录</span><span>状态 / 分析时间</span></div><div id="quote-list" class="quote-list"></div></div>
+              <div class="quote-detail" id="quote-detail"><div class="empty">选择一条记录，查看买家需求与报价判断。</div></div>
             </div>
           </div>
         </section>
-        <footer class="page-footer"><span>RFQ / QUOTE DATASET</span><span>Agent 已验证提交 <strong id="submitted-count">—</strong> 条。客户报价单 ≠ 已发送；系统条件报价 ≠ 成交。</span></footer>
+        <footer class="page-footer"><span>RFQ / QUOTE DATASET</span><span>Agent 已确认提交成功 <strong id="submitted-count">—</strong> 条。客户报价单 ≠ 已发送；「有金额，条件待确认」不代表已发送或成交。</span></footer>
       </main>
     </div>
     <aside id="notification-toast" class="notification-toast" role="alert" hidden>

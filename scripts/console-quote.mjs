@@ -10,7 +10,11 @@ import { loadConfig, projectDir } from "../src/config.js";
 import { submissionToken } from "../src/form.js";
 import { canArchiveDraft, readDraftArchive } from "../src/draft-archive.js";
 import { buyerRfqUrl, quoteImages } from "../src/quote-images.js";
-import { hasDefiniteQuote } from "../src/quote-visibility.js";
+import { hasDefiniteQuote, operatorPriceExpired } from "../src/quote-visibility.js";
+import { assessPriceOpportunity, loadHistoricalCaseQuotes } from "../src/price-opportunity.js";
+import { findVerifiedPriceLeads, loadVerifiedPriceLeads } from "../src/price-memory.js";
+import { assessQuoteReadiness } from "../src/quote-readiness.js";
+import { summarizeQuoteFunnel } from "../src/quote-funnel.js";
 import { fillQuote, submitQuote } from "../plugins/alibaba-rfq-midscene/scripts/runtime.mjs";
 
 const root = projectDir;
@@ -35,7 +39,8 @@ function review(draftId) {
   const draft = record.draft || {};
   const submission = record.submission || {};
   const config = loadConfig();
-  const base = { ...config, autoContactMode: "fill", autoContactCategories: [record.analysis?.categoryId].filter(Boolean),
+  const base = { ...config, autoContactMode: "fill", manualOperatorQuote: true,
+    autoContactCategories: [record.analysis?.categoryId].filter(Boolean),
     quotePort: draft.port || "", autoContactAllowFixtureUrls: false };
   const contactState = loadContactState();
   const fillPolicy = evaluateAutoContact(base, record, contactState);
@@ -64,7 +69,7 @@ function review(draftId) {
   if (!filled) submitReasons.push("须先回填，并核对浏览器字段及截图");
   return {
     id: draftId, reviewHash: hash,
-    createdAt: Number.isFinite(Date.parse(record.createdAt)) ? record.createdAt : stat.birthtime.toISOString(),
+    createdAt: record.priceApproval?.approvedAt || (Number.isFinite(Date.parse(record.createdAt)) ? record.createdAt : stat.birthtime.toISOString()),
     updatedAt: stat.mtime.toISOString(), submittedAt: submission.completedAt || record.timing?.submissionCompletedAt || null,
     // 若草稿后来被 CLI 或旧版工作台回填/提交，旧整理标记不能隐藏新证据。
     archivedAt: canArchiveDraft(submission.status) ? readDraftArchive(root)[draftId]?.archivedAt || null : null,
@@ -81,7 +86,7 @@ function review(draftId) {
     quote: { status: quote.status || "unknown", reason: quote.reason || "", categoryId: record.analysis?.categoryId || "",
       quantity: quote.quantity, unitPriceUsd: quote.unitPriceUsd, setupUsd: quote.setupUsd, totalUsd: quote.totalUsd,
       currency: quote.currency, tradeTerm: quote.tradeTerm, validityDays: quote.validityDays,
-      basis: quote.basis || "", missingFields: quote.missingFields || [] },
+      basis: quote.basis || "", missingFields: quote.missingFields || [], priceEvidence: quote.priceEvidence || null },
     images: quoteImages(root, record),
     hasDraft: Boolean(record.draft),
     draft: { productName: draft.productName || "", productDetails: draft.productDetails || "",
@@ -94,19 +99,41 @@ function review(draftId) {
 
 if (command === "list") {
   const archived = readDraftArchive(root);
+  const historicalPrices = loadHistoricalCaseQuotes(root);
+  const verifiedPrices = loadVerifiedPriceLeads(root);
   const rows = fs.existsSync(draftsDir) ? fs.readdirSync(draftsDir).filter((name) => name.endsWith(".json")).map((name) => {
     try {
-      const { record } = loadDraft(name.slice(0, -5));
+      const { record, hash } = loadDraft(name.slice(0, -5));
       if (!record.rfq?.id || !record.quote) return null;
       const stat = fs.statSync(path.join(draftsDir, name));
-      const createdAt = Number.isFinite(Date.parse(record.createdAt)) ? record.createdAt : stat.birthtime.toISOString();
+      const createdAt = record.priceApproval?.approvedAt || (Number.isFinite(Date.parse(record.createdAt)) ? record.createdAt : stat.birthtime.toISOString());
+      // Re-evaluate against the current local catalog: a newly imported quote,
+      // a corrected matcher, or an expired reference must affect old RFQs too.
+      const priceOpportunity = assessPriceOpportunity(record.rfq, record.analysis || {}, record.quote, historicalPrices);
+      const priceMemoryLeads = findVerifiedPriceLeads(record.rfq, record.analysis || {}, verifiedPrices);
+      const quoteReadiness = assessQuoteReadiness(record);
       return { id: name.slice(0, -5), rfqId: record.rfq.id, title: record.rfq.title || "未命名 RFQ",
         quoteStatus: record.quote.status || "unknown", submissionStatus: record.submission?.status || "未操作",
         reason: record.quote.reason || "", categoryId: record.analysis?.categoryId || record.quote.categoryId || "未分类",
-        summary: record.rfq.summary || "", searchTerm: record.rfq.searchTerm || "", country: record.rfq.country || "",
+        summary: record.rfq.summary || "", buyerRequirement: String(record.rfq.detailText || record.rfq.buyerText || record.rfq.summary || "").slice(0, 8000),
+        searchTerm: record.rfq.searchTerm || "", country: record.rfq.country || "",
         searchText: [record.rfq.title, record.rfq.summary, record.rfq.detailText, record.draft?.buyerMessage,
           record.rfq.id].filter(Boolean).join("\n").slice(0, 16000),
-        hasDraft: Boolean(record.draft), definiteQuote: hasDefiniteQuote(record), createdAt, updatedAt: stat.mtime.toISOString(),
+        hasDraft: Boolean(record.draft), definiteQuote: hasDefiniteQuote(record), images: quoteImages(root, record), priceOpportunity, priceMemoryLeads,
+        quoteReadiness, reviewHash: hash,
+        buyerQuantity: record.analysis?.fields?.quantity || record.rfq.quantity || null,
+        analysisFields: record.analysis?.fields || {},
+        priceSource: record.quote.priceEvidence?.kind || "rule",
+        supplierProposalCount: (record.quote.priceEvidence?.specReview?.entries || [])
+          .filter((entry) => entry.source === "supplier_proposal").length,
+        priceValidThrough: record.quote.priceEvidence?.validThrough || null,
+        priceExpired: operatorPriceExpired(record),
+        recommendation: record.analysis?.recommendation || "review",
+        analysisConfidence: record.analysis?.confidence ?? null,
+        missingRequired: record.analysis?.missingRequired || [], riskFlags: record.analysis?.riskFlags || [],
+        detailUrl: buyerRfqUrl(record.rfq.detailUrl), createdAt,
+        reanalysisAt: record.reanalysis?.reviewedAt || null,
+        updatedAt: stat.mtime.toISOString(),
         submittedAt: record.submission?.completedAt || record.timing?.submissionCompletedAt || null,
         quantity: record.quote.quantity ?? null, unitPriceUsd: record.quote.unitPriceUsd ?? null,
         totalUsd: record.quote.totalUsd ?? null, currency: record.quote.currency || null,
@@ -114,7 +141,7 @@ if (command === "list") {
     } catch { return null; }
   }).filter(Boolean).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) : [];
   const active = rows.filter((row) => !row.archivedAt);
-  console.log(JSON.stringify({ drafts: rows, counts: { total: active.length, archived: rows.length - active.length,
+  console.log(JSON.stringify({ drafts: rows, funnel: summarizeQuoteFunnel(rows), counts: { total: active.length, archived: rows.length - active.length,
     quoted: active.filter((row) => row.quoteStatus === "quoted").length,
     submitted: active.filter((row) => row.submissionStatus === "submitted").length } }));
 } else if (command === "review") {

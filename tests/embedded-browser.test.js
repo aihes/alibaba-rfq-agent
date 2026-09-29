@@ -63,6 +63,29 @@ test("owned browser uses isolated persistent session, does not automate login si
     b.invalidate(); await assert.rejects(b.command(p), /失效/);
   } finally { b.close(); }
 });
+test("embedded RFQ browser can capture a visible attachment element without quote permission", async () => {
+  const b = new EmbeddedBrowser({ BrowserWindow: FakeWindow, authorize: () => ({ browser: true, quote: false }) });
+  try {
+    const { lease } = await b.command({ action: "connect" });
+    const wc = b.window.webContents;
+    wc.debugger.sendCommand = async (method, params) => {
+      if (method === "Runtime.evaluate") {
+        assert.match(params.expression, /scrollIntoView/);
+        assert.match(params.expression, /\.brh-at-item/);
+        return { result: { value: { x: 12, y: 34, width: 80, height: 60 } } };
+      }
+      assert.equal(method, "Page.captureScreenshot");
+      assert.deepEqual(params.clip, { x: 12, y: 34, width: 80, height: 60, scale: 1 });
+      assert.equal(params.captureBeyondViewport, false);
+      return { data: "cG5n" };
+    };
+    const shot = { action: "elementScreenshot", lease, expectedUrl: RFQ_HOME, selector: ".brh-at-item", index: 0 };
+    assert.equal((await b.command(shot)).data, "cG5n");
+    await assert.rejects(b.command({ ...shot, index: -1 }), /参数无效/);
+    wc.url = `${RFQ_HOME}?changed=1`;
+    await assert.rejects(b.command(shot), /页面已变化/);
+  } finally { b.close(); }
+});
 test("manual login inspection works with Agent disabled, exposes no auth query, and never grants a worker lease", async () => {
   const permission = { browser: false, quote: false, busy: false };
   const b = new EmbeddedBrowser({ BrowserWindow: FakeWindow, authorize: () => permission });

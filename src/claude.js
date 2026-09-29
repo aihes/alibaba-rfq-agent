@@ -4,6 +4,8 @@ import { extractImageText } from "./ocr.js";
 import { extractJson, sanitizeRfqText } from "./utils.js";
 import { callModelHttp } from "./model-http.js";
 import { buildModelPrompt, renderPrompt } from "./prompt-templates.js";
+import { withQuoteSkill } from "./quote-skill.js";
+import { recordModelUsage } from "./model-usage.js";
 
 const nullableNumber = { anyOf: [{ type: "number" }, { type: "null" }] };
 const nullableString = { anyOf: [{ type: "string" }, { type: "null" }] };
@@ -122,12 +124,14 @@ const quoteRationaleSchema = {
   }
 };
 
-export async function callAnthropicHttp(config, system, payload, maxTokens = 1600, { request = fetch } = {}) {
+export async function callAnthropicHttp(config, system, payload, maxTokens = 1600, { request = fetch, phase = "unspecified" } = {}) {
   if (!config.anthropicApiKey || !config.anthropicModel) {
     throw new Error("anthropic-http requires ANTHROPIC_API_KEY and ANTHROPIC_HTTP_MODEL");
   }
   const url = new URL(config.anthropicApiUrl || "https://api.anthropic.com/v1/messages");
   if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || !url.pathname.endsWith("/v1/messages")) throw new Error("Anthropic 兼容接口须为无凭据的 HTTPS messages 地址");
+  let usage, status = "failed";
+  try {
   const response = await request(url.href, {
     method: "POST",
     headers: {
@@ -148,13 +152,27 @@ export async function callAnthropicHttp(config, system, payload, maxTokens = 160
   });
   if (!response.ok) throw new Error(`Anthropic HTTP ${response.status}，请检查密钥、模型权限或余额`);
   const data = await response.json();
+  usage = data.usage;
   if (data.error || data.stop_reason === "max_tokens") throw new Error("模型返回错误或结果被截断");
-  return extractJson(data.content?.filter((block) => block.type === "text").map((block) => block.text).join("\n") || "");
+  const result = extractJson(data.content?.filter((block) => block.type === "text").map((block) => block.text).join("\n") || "");
+  status = "success";
+  return result;
+  } finally {
+    recordModelUsage({ provider: "anthropic-http", model: config.anthropicModel, phase, status, usage });
+  }
 }
 
-function classificationPayload(rfq, supportedCategories) {
+function classificationPayload(rfq, supportedCategories, pricing) {
   return {
     categoryContract: Object.fromEntries(Object.entries(supportedCategories).map(([id, value]) => [id, value.keywords])),
+    // The model needs to know which specifications matter to the local price
+    // gate, but it must never receive the actual price table in a classifier
+    // request. The rule engine remains the only source of calculated amounts.
+    pricingCoverage: Object.fromEntries(Object.entries(pricing?.rules || {}).map(([id, rule]) => [id, {
+      requiredFields: rule.requiredFields || [],
+      pricedQuantities: rule.exactTiers ? Object.keys(rule.exactTiers).map(Number) : [rule.baseQty].filter(Number.isFinite),
+      validatedScenario: rule.validatedScenario || ""
+    }])),
     rfq: {
       title: rfq.title,
       summary: rfq.summary,
@@ -171,7 +189,7 @@ function classificationPayload(rfq, supportedCategories) {
 }
 
 export function buildClassificationRequest(config, rfq, supportedCategories) {
-  const payload = classificationPayload(rfq, supportedCategories);
+  const payload = classificationPayload(rfq, supportedCategories, config.pricing);
   const imagePaths = (rfq.imagePaths || []).slice(0, config.maxRfqImages);
   // 只有本机 Claude Agent 具备 Read 工具；HTTP 模型只能使用已提取的 OCR 文本。
   const agentImagePaths = config.agentProvider === "local-claude-sdk" && config.imageAnalysisMode === "agent-read" ? imagePaths : [];
@@ -180,7 +198,7 @@ export function buildClassificationRequest(config, rfq, supportedCategories) {
     : imagePaths.length
       ? renderPrompt("image-ocr")
     : renderPrompt("image-none");
-  const { prompt, systemPrompt } = buildModelPrompt("classification.system", { imageInstructions }, payload);
+  const { prompt, systemPrompt } = withQuoteSkill(buildModelPrompt("classification.system", { imageInstructions }, payload));
 
   return {
     prompt,
@@ -197,7 +215,7 @@ export async function classifyWithClaude(config, rfq, supportedCategories) {
   const request = buildClassificationRequest(config, rfq, supportedCategories);
 
   if (config.agentProvider === "openai-http") {
-    const data = await callModelHttp(config, request.systemPrompt, request.payload);
+    const data = await callModelHttp(config, request.systemPrompt, request.payload, 1600, { phase: "classification" });
     const images = rfq.imageAssets || [];
     const hasOcr = images.some((image) => image.ocrStatus === "read" && image.ocrText);
     return { ...data, imageReadStatus: hasOcr ? "partial" : images.length ? "unsupported" : "not_provided",
@@ -210,13 +228,14 @@ export async function classifyWithClaude(config, rfq, supportedCategories) {
       prompt: request.prompt,
       schema: classificationSchema(Object.keys(supportedCategories)),
       imagePaths: request.agentImagePaths,
-      maxTurns: request.maxTurns
+      maxTurns: request.maxTurns,
+      phase: "classification"
     });
     return { ...data, agent: meta };
   }
 
   if (config.agentProvider === "anthropic-http") {
-    const data = await callAnthropicHttp(config, request.systemPrompt, request.payload);
+    const data = await callAnthropicHttp(config, request.systemPrompt, request.payload, 1600, { phase: "classification" });
     return { ...data, imageReadStatus: "not_provided", imageEvidence: [], agent: { provider: "anthropic-http", requestedModel: config.anthropicModel } };
   }
   throw new Error(`Unsupported AGENT_PROVIDER: ${config.agentProvider}`);
@@ -224,28 +243,31 @@ export async function classifyWithClaude(config, rfq, supportedCategories) {
 
 export function buildDraftRequest(rfq, analysis, quote) {
   const payload = {
-    rfq: { title: rfq.title, country: rfq.country, quantity: rfq.quantity },
+    // Drafting needs the buyer's actual request, not just its search-card title.
+    // Keep untrusted buyer text sanitized before it enters the model prompt.
+    rfq: { title: rfq.title, summary: sanitizeRfqText(rfq.summary),
+      detailText: sanitizeRfqText(rfq.detailText), country: rfq.country, quantity: rfq.quantity },
     analysis,
     quote
   };
-  return { ...buildModelPrompt("draft.system", {}, payload), payload, maxTurns: 1 };
+  return { ...withQuoteSkill(buildModelPrompt("draft.system", {}, payload)), payload, maxTurns: 1 };
 }
 
 export async function draftWithClaude(config, rfq, analysis, quote) {
   const request = buildDraftRequest(rfq, analysis, quote);
 
   if (config.agentProvider === "openai-http") {
-    const data = await callModelHttp(config, request.systemPrompt, request.payload, 1000);
+    const data = await callModelHttp(config, request.systemPrompt, request.payload, 1000, { phase: "draft" });
     return { ...data, agent: { provider: "openai-http", requestedModel: config.modelName } };
   }
 
   if (config.agentProvider === "local-claude-sdk") {
-    const { data, meta } = await runLocalAgentJson(config, { prompt: request.prompt, schema: draftSchema, maxTurns: request.maxTurns });
+    const { data, meta } = await runLocalAgentJson(config, { prompt: request.prompt, schema: draftSchema, maxTurns: request.maxTurns, phase: "draft" });
     return { ...data, agent: meta };
   }
 
   if (config.agentProvider === "anthropic-http") {
-    const data = await callAnthropicHttp(config, request.systemPrompt, request.payload, 1000);
+    const data = await callAnthropicHttp(config, request.systemPrompt, request.payload, 1000, { phase: "draft" });
     return { ...data, agent: { provider: "anthropic-http", requestedModel: config.anthropicModel } };
   }
   throw new Error(`Unsupported AGENT_PROVIDER: ${config.agentProvider}`);
@@ -275,14 +297,14 @@ export function buildQuoteRationaleRequest(config, rfq, analysis, quote) {
       categoryRule
     }
   };
-  return { ...buildModelPrompt("rationale.system", {}, payload), payload, maxTurns: 1 };
+  return { ...withQuoteSkill(buildModelPrompt("rationale.system", {}, payload)), payload, maxTurns: 1 };
 }
 
 export async function explainQuoteWithClaude(config, rfq, analysis, quote) {
   const request = buildQuoteRationaleRequest(config, rfq, analysis, quote);
 
   if (config.agentProvider === "openai-http") {
-    const data = await callModelHttp(config, request.systemPrompt, request.payload, 1800);
+    const data = await callModelHttp(config, request.systemPrompt, request.payload, 1800, { phase: "rationale" });
     return { request, output: data, agent: { provider: "openai-http", requestedModel: config.modelName } };
   }
 
@@ -290,13 +312,14 @@ export async function explainQuoteWithClaude(config, rfq, analysis, quote) {
     const { data, meta } = await runLocalAgentJson(config, {
       prompt: request.prompt,
       schema: quoteRationaleSchema,
-      maxTurns: request.maxTurns
+      maxTurns: request.maxTurns,
+      phase: "rationale"
     });
     return { request, output: data, agent: meta };
   }
 
   if (config.agentProvider === "anthropic-http") {
-    const data = await callAnthropicHttp(config, request.systemPrompt, request.payload, 1400);
+    const data = await callAnthropicHttp(config, request.systemPrompt, request.payload, 1400, { phase: "rationale" });
     return {
       request,
       output: data,

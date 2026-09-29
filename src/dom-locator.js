@@ -114,7 +114,10 @@ export class DomLocator {
     return this.page.evaluateJson(`document.querySelectorAll(${JSON.stringify(this.selector)}).length`);
   }
 
-  async screenshot() {
-    throw new Error("Element screenshots are unavailable; use a page screenshot");
+  async screenshot(options = {}) {
+    // RFQ 附件常在页面里用预览块展示，原始图片 URL 未必可下载。
+    // Electron 的 DOM 适配器必须支持区域截图，否则 images.js 的
+    // 附件备用采集路径会在这里直接失败并被当成「没有图片」。
+    return this.page.screenshotElement(this.selector, this.index, options);
   }
 }

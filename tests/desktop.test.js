@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -60,10 +61,15 @@ test("workbench HTTP retains local authorization and evidence allowlist with bro
     const get = async (route) => fetch(service.url + route);
     assert.equal((await (await get("api/catalog")).json()).counts.cases, 0);
     let probes = 0;
+    const originalRunJson = service.console.runJson.bind(service.console);
     service.console.runJson = async () => { probes++; return { connected: false, loggedIn: false }; };
     assert.equal((await (await get("api/env/check?force=1")).json()).status, "checked");
     assert.equal(probes, 1);
+    service.console.runJson = originalRunJson;
     assert.equal((await get("api/extension")).status, 200);
+    const priceCsv = await get("price-csv.js");
+    assert.equal(priceCsv.status, 200);
+    assert.match(priceCsv.headers.get("content-type"), /text\/javascript/);
     const post = (origin, payload) => fetch(service.url + "api/ops/settings", { method: "POST", headers: { "Content-Type": "application/json", "X-Case-Console": "1", ...(origin ? { Origin: origin } : {}) }, body: JSON.stringify(payload) });
     assert.equal((await post("https://attacker.example", { browserEnabled: true })).status, 403);
     assert.equal((await post(null, { browserEnabled: true })).status, 403);
@@ -75,11 +81,91 @@ test("workbench HTTP retains local authorization and evidence allowlist with bro
     fs.mkdirSync(images, { recursive: true }); fs.mkdirSync(drafts, { recursive: true });
     fs.writeFileSync(path.join(images, "product-1.png"), Buffer.from("89504e470d0a1a0a", "hex"));
     fs.writeFileSync(path.join(drafts, "rfq-photo.json"), JSON.stringify({ rfq: { id: "rfq-photo",
-      imageAssets: [{ filePath: "/previous-computer/product-1.png" }] } }));
+      title: "Buyer product photo", imageAssets: [{ filePath: "/previous-computer/product-1.png" }] },
+      analysis: { categoryId: "paper_shopping_bag", recommendation: "review" },
+      quote: { status: "needs_review" }, submission: { status: "skipped" } }));
     const photo = await get("api/quote/image?draft=rfq-photo&index=0");
     assert.equal(photo.status, 200); assert.equal(photo.headers.get("content-type"), "image/png");
     assert.equal((await get("api/quote/image?draft=rfq-photo")).status, 404);
     assert.equal((await get("api/quote/image?draft=..%2F..%2F.env&index=0")).status, 404);
+  } finally { await service.close(); fs.rmSync(root, { recursive: true }); }
+});
+test("pending RFQ exposes its captured buyer image in list and read-only detail", async () => {
+  const root = temporary(); seed(root);
+  const images = path.join(root, "data/rfqs/rfq-photo/images");
+  fs.mkdirSync(images, { recursive: true });
+  fs.mkdirSync(path.join(root, "data/drafts"), { recursive: true });
+  fs.writeFileSync(path.join(images, "product-1.png"), Buffer.from("89504e470d0a1a0a", "hex"));
+  fs.writeFileSync(path.join(root, "data/drafts/rfq-photo.json"), JSON.stringify({
+    rfq: { id: "rfq-photo", title: "Buyer product photo", imageAssets: [{ filePath: "/previous-computer/product-1.png" }] },
+    analysis: { categoryId: "paper_shopping_bag", recommendation: "review" },
+    quote: { status: "needs_review" }, submission: { status: "skipped" }
+  }));
+  const service = await createCaseServer({ resources, workspace: root });
+  try {
+    const listed = await (await fetch(service.url + "api/quotes")).json();
+    assert.deepEqual(listed.drafts.find((row) => row.id === "rfq-photo").images, [{ index: 0, label: "买家图片" }]);
+    const detail = await (await fetch(service.url + "api/quote?draft=rfq-photo")).json();
+    assert.equal(detail.quote.status, "needs_review");
+    assert.deepEqual(detail.images, [{ index: 0, label: "买家图片" }]);
+  } finally { await service.close(); fs.rmSync(root, { recursive: true }); }
+});
+test("price approval API requires same-origin action and creates a local-only quote", async () => {
+  const root = temporary(); seed(root);
+  const service = await createCaseServer({ resources, workspace: root, spawnProcess: () => assert.fail("price approval must not launch browser or model") });
+  try {
+    const directory = path.join(root, "data/drafts");
+    fs.mkdirSync(directory, { recursive: true });
+    const file = path.join(directory, "draft-price.json");
+    fs.writeFileSync(file, JSON.stringify({ rfq: { id: "rfq-price", title: "Kraft bag", quantity: 1000 },
+      analysis: { categoryId: "paper_shopping_bag", fields: { quantity: 1000 }, recommendation: "review", buyerQuestions: [] },
+      quote: { status: "needs_review" }, submission: { status: "skipped" } }));
+    const payload = { id: "draft-price", rfqId: "rfq-price", reviewHash: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"),
+      unitPriceUsd: 0.25, validThrough: new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10),
+      sourceNote: "Current supplier sell price confirmed by operator", specification: "Kraft paper bag, 1000 pieces, EXW; buyer specifications must be checked.", approved: true };
+    const post = (origin) => fetch(service.url + "api/quotes/approve-price", { method: "POST",
+      headers: { "Content-Type": "application/json", "X-Case-Console": "1", Origin: origin }, body: JSON.stringify(payload) });
+    assert.equal((await post("https://attacker.example")).status, 403);
+    assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).quote.status, "needs_review");
+    service.console.runJson = async (script) => { assert.equal(script, "scripts/build_case_catalog.mjs"); return {}; };
+    const response = await post(new URL(service.url).origin);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).browserAction, "none");
+    assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).quote.totalUsd, 250);
+  } finally { await service.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+test("quote example reads a local case when available and falls back to the bundled redacted scan", async () => {
+  const root = temporary(); seed(root);
+  const service = await createCaseServer({ resources, workspace: root,
+    spawnProcess: () => assert.fail("case preview must not start a browser or process") });
+  try {
+    const fallback = await (await fetch(service.url + "api/quote/example")).json();
+    assert.equal(fallback.source, "bundled_redacted");
+    assert.equal(fallback.detail.quote.status, "conditional_quote");
+    assert.equal(fallback.detail.quote.totalUsd, 495);
+    assert.equal(fallback.detail.submission.status, "skipped");
+    assert.equal(fallback.detail.rfq.detailUrl, undefined);
+    assert.equal(fs.existsSync(path.join(root, "data/drafts")), false);
+
+    const drafts = path.join(root, "data/drafts");
+    fs.mkdirSync(drafts);
+    fs.writeFileSync(path.join(drafts, "real-rfq.json"), JSON.stringify({
+      createdAt: "2026-09-20T00:00:00Z",
+      rfq: { id: "real-rfq", title: "Real RFQ", detailText: "Buyer asks for cartons",
+        detailUrl: "https://sourcing.alibaba.com/rfq_detail.htm?p=real-rfq" },
+      analysis: { categoryId: "corrugated_rsc", recommendation: "quote" },
+      quote: { status: "quoted", currency: "USD", quantity: 100, unitPriceUsd: 2, totalUsd: 200 },
+      draft: { productName: "Cartons", buyerMessage: "Our quote is USD 200" },
+      submission: { status: "not_submitted" }, privateField: "must not leave workspace"
+    }));
+    const local = await (await fetch(service.url + "api/quote/example")).json();
+    assert.equal(local.source, "local_scan");
+    assert.equal(local.detail.id, "real-rfq");
+    assert.equal(local.detail.rfq.detailText, "Buyer asks for cartons");
+    assert.equal(local.detail.rfq.detailUrl, "https://sourcing.alibaba.com/rfq_detail.htm?p=real-rfq");
+    assert.equal(local.detail.quote.totalUsd, 200);
+    assert.equal(JSON.stringify(local).includes("must not leave workspace"), false);
+    assert.deepEqual(fs.readdirSync(drafts), ["real-rfq.json"]);
   } finally { await service.close(); fs.rmSync(root, { recursive: true }); }
 });
 test("test and real opportunity remain visible in workbench notification history", async () => {
@@ -135,6 +221,23 @@ test("console requires saved model and respects scan/quote authorization and con
     assert.equal(new OperatorConsole({ resources, workspace: root, desktop: true }).settings.browserEnabled, true);
     const restored = new OperatorConsole({ resources, workspace: root });
     assert.equal(restored.settings.browserEnabled, true); assert.equal(restored.settings.quoteEnabled, false);
+  } finally { fs.rmSync(root, { recursive: true }); }
+});
+test("manual quote permission is scoped to an approved single-RFQ launch", async () => {
+  const root = temporary(); seed(root);
+  try {
+    const c = new OperatorConsole({ resources, workspace: root, desktop: true });
+    c.settings.quoteEnabled = true;
+    c.reviewQuote = async () => ({ archivedAt: null, reviewHash: "current-hash", rfq: { id: "rfq-reviewed" },
+      quote: { categoryId: "paper_shopping_bag" }, draft: { port: "Hangzhou" }, fillEligible: true, submitEligible: true });
+    c.launch = (_task, _script, _args, extra) => extra;
+    assert.equal(c.env().RFQ_MANUAL_OPERATOR_QUOTE, "0");
+    const base = { draftId: "draft-reviewed", reviewHash: "current-hash", confirmation: "rfq-reviewed", approved: true };
+    assert.equal((await c.startQuote({ ...base, kind: "fill" })).RFQ_MANUAL_OPERATOR_QUOTE, "1");
+    const submit = await c.startQuote({ ...base, kind: "submit" });
+    assert.equal(submit.RFQ_MANUAL_OPERATOR_QUOTE, "1");
+    assert.equal(submit.AUTO_CONTACT_MODE, "submit");
+    await assert.rejects(() => c.startQuote({ ...base, confirmation: "other", kind: "fill" }), /RFQ ID/);
   } finally { fs.rmSync(root, { recursive: true }); }
 });
 test("HTTP model adapter returns final JSON only, rejects truncation and does not echo credentials", async () => {

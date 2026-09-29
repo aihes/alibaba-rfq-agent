@@ -271,7 +271,8 @@ export class EmbeddedBrowser {
   async execute(p, generation) {
     const shapes = { connect: ["action"], release: ["action", "lease"], state: ["action", "lease"],
       goto: ["action", "lease", "url"], evaluate: ["action", "lease", "expression", "mutation", "expectedUrl"],
-      screenshot: ["action", "lease", "fullPage", "expectedUrl"] };
+      screenshot: ["action", "lease", "fullPage", "expectedUrl"],
+      elementScreenshot: ["action", "lease", "selector", "index", "expectedUrl"] };
     if (!p || typeof p.action !== "string" || !Object.hasOwn(shapes, p.action) || Object.keys(p).some((key) => !shapes[p.action].includes(key))) throw new Error("内置浏览器操作参数无效");
     if (p.action === "release") { if (p.lease === this.lease) this.invalidate(false); return { released: true }; }
     if (generation !== this.generation) throw new Error("内置浏览器连接已失效，请重新检测");
@@ -299,6 +300,29 @@ export class EmbeddedBrowser {
     if (p.action === "evaluate" && (typeof p.expression !== "string" || p.expression.length > 12000 || typeof p.mutation !== "boolean")) throw new Error("页面操作参数无效");
     if (p.mutation && !permission.quote) throw new Error("逐单报价授权已关闭，禁止填写或点击");
     if (!wc.debugger.isAttached()) wc.debugger.attach("1.3");
+    if (p.action === "elementScreenshot") {
+      if (typeof p.selector !== "string" || !p.selector || p.selector.length > 512 ||
+          !Number.isInteger(p.index) || p.index < 0 || p.index >= 32) throw new Error("附件截图参数无效");
+      // 截图只覆盖 Alibaba RFQ 页面中的目标元素。先滚到可见位置，
+      // 再用 CSS 像素裁剪当前视口，避免把整页或登录信息写进附件目录。
+      const expression = `(() => {
+        const element = document.querySelectorAll(${JSON.stringify(p.selector)})[${p.index}];
+        if (!element) return null;
+        element.scrollIntoView({ block: "center", inline: "center" });
+        const rect = element.getBoundingClientRect();
+        const x = Math.max(0, rect.left), y = Math.max(0, rect.top);
+        return { x, y, width: Math.min(rect.right, innerWidth) - x,
+          height: Math.min(rect.bottom, innerHeight) - y };
+      })()`;
+      const measured = await wc.debugger.sendCommand("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: false, timeout: 10000 });
+      if (measured.exceptionDetails) throw new Error("附件区域无法定位");
+      const box = measured.result?.value;
+      if (!box || ![box.x, box.y, box.width, box.height].every(Number.isFinite) ||
+          box.width < 1 || box.height < 1 || box.width > 2560 || box.height > 2560) throw new Error("附件区域不可见或尺寸异常");
+      const result = await wc.debugger.sendCommand("Page.captureScreenshot", { format: "png", captureBeyondViewport: false,
+        clip: { x: box.x, y: box.y, width: box.width, height: box.height, scale: 1 } });
+      return { data: result.data };
+    }
     if (p.action === "screenshot") {
       if (typeof p.fullPage !== "boolean") throw new Error("截图参数无效");
       let clip;

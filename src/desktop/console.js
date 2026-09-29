@@ -4,7 +4,9 @@ import crypto from "node:crypto";
 import { spawn, execFile } from "node:child_process";
 import { readProgressEvents } from "../progress.js";
 import { setDraftArchived } from "../draft-archive.js";
+import { approveRfqPrice } from "../price-approval.js";
 import { stageEvidenceFromRecord } from "../stage-evidence.js";
+import { summarizeModelUsage } from "../model-usage.js";
 
 const now = () => new Date().toISOString();
 const attention = /CAPTCHA|verification challenge|login is required|login could not be verified|Cannot attach to the existing Chrome session|Browser connection or Alibaba requires human attention|Chrome Bridge or Alibaba requires human attention|needs_manual_review|Submit was clicked, but success could not be verified|内置浏览器|页面操作失败/i;
@@ -76,6 +78,7 @@ export class OperatorConsole {
     return { ...process.env, ...this.environment(), RFQ_WORKSPACE_DIR: this.workspace,
       ...(this.desktop ? { ELECTRON_RUN_AS_NODE: "1", RFQ_DESKTOP: "1" } : {}),
       AUTO_CONTACT_MODE: "off", ALLOW_LIVE_SUBMIT: "false", AUTO_CONTACT_ACK: "",
+      RFQ_MANUAL_OPERATOR_QUOTE: "0",
       RFQ_CONSOLE_SETTINGS_FILE: this.settingsFile, RFQ_CONSOLE_URL: this.url,
       ...extra };
   }
@@ -137,7 +140,8 @@ export class OperatorConsole {
     const progress = progressFile ? read(progressFile, null) : null;
     const history = progressFile ? readProgressEvents(progressFile) : { events: [], truncated: false };
     return { settings: this.settings, searchTerms: this.searchTerms, run: run ? { ...run, progress,
-      progressEvents: history.events, progressTruncated: history.truncated } : null,
+      progressEvents: history.events, progressTruncated: history.truncated,
+      modelUsage: summarizeModelUsage(progressFile) } : null,
       log: this.tail(), serverTime: now(), envChecking: Boolean(this.probe || this.embeddedBrowser?.inspecting || this.browserImporting),
       notifications: { supported: this.desktop || process.platform === "darwin", last, events: events.slice(0, 20) } };
   }
@@ -263,6 +267,30 @@ export class OperatorConsole {
     const value = report("checked"); this.cache = { at: Date.now(), value }; return value;
   }
   listQuotes() { return this.runJson("scripts/console-quote.mjs", ["list"]); }
+  reanalyzeDraft(request) {
+    this.assertIdle();
+    if (!request || Object.keys(request).sort().join(",") !== "id,reviewHash" ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(request.id || "") ||
+      !/^[a-f0-9]{64}$/.test(request.reviewHash || "")) throw new Error("请选择有效的 RFQ 和草稿版本");
+    if (this.desktop) {
+      const env = this.environment();
+      if (env.AGENT_PROVIDER === "local-claude-sdk" && !env.LOCAL_CLAUDE_EXECUTABLE)
+        throw new Error("未找到本机 Claude，请安装后重试或在设置中选择 GLM HTTP");
+      if (env.AGENT_PROVIDER !== "local-claude-sdk" && !env.MODEL_API_KEY)
+        throw new Error("请先在模型设置中填写 API Key 并保存");
+    }
+    return this.launch({ kind: "reanalyze", draftId: request.id }, "scripts/reanalyze-draft.mjs",
+      [request.id, request.reviewHash]);
+  }
+  async approvePrice(request) {
+    this.assertIdle();
+    this.quotePreparing = true;
+    try {
+      const result = approveRfqPrice(this.workspace, request, { port: this.environment().QUOTE_PORT || "" });
+      try { await this.runJson("scripts/build_case_catalog.mjs", [], 120000); return { ...result, catalogUpdated: true }; }
+      catch { return { ...result, catalogUpdated: false }; }
+    } finally { this.quotePreparing = false; }
+  }
   archiveQuote(request) {
     this.assertIdle();
     if (!request || Object.keys(request).some((key) => !["id", "archived"].includes(key))) throw new Error("草稿整理参数无效");
@@ -281,7 +309,8 @@ export class OperatorConsole {
       if (this.closed || !this.settings.quoteEnabled) throw new Error("逐单浏览器报价模式已关闭");
       if (request.reviewHash !== review.reviewHash || request.confirmation !== review.rfq.id) throw new Error("草稿已变化或 RFQ ID 确认不匹配，请重新核对");
       if (!review[request.kind === "fill" ? "fillEligible" : "submitEligible"]) throw new Error("当前草稿不允许执行该报价动作");
-      const extra = request.kind === "submit" ? { AUTO_CONTACT_MODE: "submit", ALLOW_LIVE_SUBMIT: "true", AUTO_CONTACT_ACK: "I_UNDERSTAND_AUTO_QUOTES_ARE_SENT", AUTO_CONTACT_CATEGORIES: review.quote.categoryId, QUOTE_PORT: review.draft.port } : {};
+      const extra = { RFQ_MANUAL_OPERATOR_QUOTE: "1",
+        ...(request.kind === "submit" ? { AUTO_CONTACT_MODE: "submit", ALLOW_LIVE_SUBMIT: "true", AUTO_CONTACT_ACK: "I_UNDERSTAND_AUTO_QUOTES_ARE_SENT", AUTO_CONTACT_CATEGORIES: review.quote.categoryId, QUOTE_PORT: review.draft.port } : {}) };
       return this.launch({ kind: `quote_${request.kind}`, draftId: request.draftId, rfqId: review.rfq.id }, "scripts/console-quote.mjs", [request.kind, request.draftId, review.reviewHash, review.rfq.id], extra);
     } finally { this.quotePreparing = false; }
   }
@@ -304,6 +333,9 @@ export class OperatorConsole {
     const run = { id: crypto.randomUUID().replaceAll("-", "").slice(0, 12), ...fields, status: "running", startedAt: now(), finishedAt: null, exitCode: null, alert: null };
     fs.mkdirSync(this.opsDir, { recursive: true });
     const progressFile = path.join(this.opsDir, `${run.id}.progress.json`);
+    // 即使价格前置筛选使本轮 0 次付费调用，也创建空流水，让界面能把
+    // “确实是 0 次”与旧版任务根本没有用量记录区分开。
+    if (["once", "watch", "reanalyze"].includes(run.kind)) fs.writeFileSync(`${progressFile}.usage.jsonl`, "", { mode: 0o600 });
     const fd = fs.openSync(path.join(this.opsDir, `${run.id}.log`), "w");
     let child;
     try { child = this.spawn(script, args, { env: this.env({ ...extra, RFQ_PROGRESS_FILE: progressFile }), stdio: ["ignore", fd, fd] }); } finally { fs.closeSync(fd); }
@@ -314,7 +346,7 @@ export class OperatorConsole {
       finishing = true;
       if (this.process !== child) return;
       const stopped = run.status === "stopping";
-      if (["once", "watch", "quote_fill", "quote_submit"].includes(run.kind) && !this.closed) {
+      if (["once", "watch", "reanalyze", "quote_fill", "quote_submit"].includes(run.kind) && !this.closed) {
         run.status = "indexing"; write(this.lastFile, run);
         try { await this.runJson("scripts/build_case_catalog.mjs", [], 120000); } catch { run.alert = "CASE 列表更新失败"; }
       }

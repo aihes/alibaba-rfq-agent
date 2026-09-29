@@ -1,4 +1,4 @@
-const state = { catalog: null, source: 'priced', category: 'all', query: '', priced: false, selected: null, tab: 'summary', view: 'cases', ops: null, opsFlash: '', envLoading: false, notificationTesting: false, notificationFlash: '', notificationSeen: null, notificationToastDraft: null, lastFinishedRun: null, quotes: null, quoteSelected: null, quoteDetail: null, quoteReview: null, quoteShowArchived: false, quoteArchiveConfirm: false, quoteArchiveError: '', quoteQuery: '', quoteStatusFilter: 'all', quoteCategoryFilter: 'all', quoteDateFrom: '', quoteDateTo: '', runHistorySignature: '', stageOpen: new Set(), stageDetailCache: new Map() };
+const state = { catalog: null, source: 'priced', category: 'all', query: '', priced: false, selected: null, tab: 'summary', view: 'cases', ops: null, opsFlash: '', envLoading: false, notificationTesting: false, notificationFlash: '', notificationSeen: null, notificationToastDraft: null, lastFinishedRun: null, quotes: null, quoteSelected: null, quoteDetail: null, quoteExample: null, quoteReview: null, quoteArchiveConfirm: false, quoteArchiveError: '', quoteQuery: '', priceImport: new Map(), quoteStatusFilter: 'all', quoteCategoryFilter: 'all', quoteDateFrom: '', quoteDateTo: '', runHistorySignature: '', stageOpen: new Set(), stageDetailCache: new Map() };
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const fmt = (value, maximumFractionDigits = 3) => value == null ? '—' : new Intl.NumberFormat('en-US', { maximumFractionDigits }).format(value);
@@ -369,9 +369,9 @@ function renderDetail() {
   });
 }
 
-const runNames = { refresh: '重新整理数据集', scan: '扫描 RFQ', once: '运行一轮分析', watch: '持续监控', quote_fill: '浏览器回填报价', quote_submit: '向买家提交报价' };
+const runNames = { refresh: '重新整理数据集', scan: '扫描 RFQ', once: '运行一轮分析', watch: '持续监控', reanalyze: '用当前 Skill 重新分析 RFQ', quote_fill: '浏览器回填报价', quote_submit: '向买家提交报价' };
 const statusNames = { running: '运行中', stopping: '正在停止', indexing: '正在更新数据集', completed: '已完成', stopped: '已停止', failed: '运行失败', attention: '需要人工处理', interrupted: '服务重启后状态未确认' };
-const stageNames = { connect: '连接浏览器', search: '搜索 RFQ', filter: '筛选新需求', detail: '读取 RFQ 详情', analysis: '模型分析需求', pricing: '核对价格规则', draft: '生成报价草稿', save: '保存结果', waiting: '等待下一轮', complete: '本轮完成', attention: '任务中断', stopped: '任务已停止' };
+const stageNames = { connect: '连接浏览器', search: '搜索 RFQ', filter: '筛选价格可用需求', detail: '读取 RFQ 详情', analysis: '模型分析需求', pricing: '核对价格规则', draft: '生成报价草稿', save: '保存结果', waiting: '等待下一轮', complete: '本轮完成', attention: '任务中断', stopped: '任务已停止' };
 const termLabel = (term) => term === '__all__' ? '全部品类' : term;
 // 保留历史 data-mode="auto" 作为内部键，界面准确表达它只开放逐单操作。
 // 扫描/监控的服务端环境始终禁用自动联系，切换模式不会发送未来的草稿。
@@ -619,7 +619,7 @@ function renderOps() {
   } else scanHelp.classList.remove('is-running');
   $('#run-progress-detail').textContent = [progress?.message || (run ? active ? '任务已启动，正在等待第一条进度…' : run.alert || '本次任务没有阶段记录。' : '点击扫描或分析后，这里会显示当前步骤和处理数量。'), category, item].filter(Boolean).join(' · ');
   $('#run-progress-time').textContent = progress?.at ? `更新于 ${new Date(progress.at).toLocaleTimeString('zh-CN')}` : '—';
-  const stages = run?.kind === 'scan' ? ['connect', 'search', 'save'] : ['once', 'watch'].includes(run?.kind) ? ['connect', 'search', 'filter', 'detail', 'analysis', 'pricing', 'draft', 'save'] : [];
+  const stages = run?.kind === 'scan' ? ['connect', 'search', 'save'] : ['once', 'watch'].includes(run?.kind) ? ['connect', 'search', 'filter', 'detail', 'analysis', 'pricing', 'draft', 'save'] : run?.kind === 'reanalyze' ? ['analysis', 'pricing', 'draft', 'save'] : [];
   const index = stage === 'complete' ? stages.length : stages.indexOf(stage);
   $('#run-progress-steps').innerHTML = stages.map((key, position) => `<li class="${index >= 0 && position < index ? 'done' : key === stage ? 'active' : ''}">${stageNames[key]}</li>`).join('');
   const recorded = Array.isArray(run?.progressEvents) ? run.progressEvents : [];
@@ -658,7 +658,13 @@ function renderOps() {
       } catch (error) { if (entry.isConnected) entry.querySelector('.stage-evidence').textContent = `无法读取：${error.message}`; }
     }));
   }
-  $('#run-facts').innerHTML = run ? (run.kind.startsWith('quote_') ? `<div><span>RFQ</span><strong>${esc(run.rfqId || '—')}</strong></div><div><span>草稿</span><strong>${esc(run.draftId || '—')}</strong></div><div><span>退出码</span><strong>${esc(run.exitCode ?? '—')}</strong></div>` : `<div><span>监控品类</span><strong>${esc(termLabel(run.term) || '—')}</strong></div><div><span>发布时间范围</span><strong>${run.recentMinutes === 0 ? '不限' : Number.isInteger(run.recentMinutes) ? `最近 ${esc(run.recentMinutes)} 分钟` : '旧任务未记录'}</strong></div><div><span>退出码</span><strong>${esc(run.exitCode ?? '—')}</strong></div>`) : '<p>选择品类并启动任务，运行状态和日志会显示在这里。</p>';
+  $('#run-facts').innerHTML = run ? (run.kind === 'reanalyze' ? `<div><span>RFQ 草稿</span><strong>${esc(run.draftId || '—')}</strong></div><div><span>动作</span><strong>仅重新分析，不操作浏览器</strong></div><div><span>退出码</span><strong>${esc(run.exitCode ?? '—')}</strong></div>` : run.kind.startsWith('quote_') ? `<div><span>RFQ</span><strong>${esc(run.rfqId || '—')}</strong></div><div><span>草稿</span><strong>${esc(run.draftId || '—')}</strong></div><div><span>退出码</span><strong>${esc(run.exitCode ?? '—')}</strong></div>` : `<div><span>监控品类</span><strong>${esc(termLabel(run.term) || '—')}</strong></div><div><span>发布时间范围</span><strong>${run.recentMinutes === 0 ? '不限' : Number.isInteger(run.recentMinutes) ? `最近 ${esc(run.recentMinutes)} 分钟` : '旧任务未记录'}</strong></div><div><span>退出码</span><strong>${esc(run.exitCode ?? '—')}</strong></div>`) : '<p>选择品类并启动任务，运行状态和日志会显示在这里。</p>';
+  if (run && ['once', 'watch', 'reanalyze'].includes(run.kind) && run.modelUsage) {
+    const usage = run.modelUsage;
+    $('#run-facts').insertAdjacentHTML('beforeend', usage.recorded
+      ? `<div><span>本次模型请求</span><strong>${esc(usage.modelAttempts)} 次</strong></div><div><span>本次 OCR 请求</span><strong>${esc(usage.ocrAttempts)} 次</strong></div><div><span>服务返回的用量</span><strong>${esc(usage.inputTokens)} 输入 / ${esc(usage.outputTokens)} 输出 tokens</strong></div><div><span>服务报告的费用</span><strong>${usage.reportedCostUsd > 0 ? `USD ${esc(usage.reportedCostUsd.toFixed(4))}` : '未提供'}</strong><small>${usage.unpriced ? `${esc(usage.unpriced)} 次请求未返回费用；这里不是账单金额` : '仅为服务返回值，非账单'}</small></div>`
+      : '<div><span>模型 / OCR 用量</span><strong>旧任务未记录</strong></div>');
+  }
   const log = $('#run-log');
   const follow = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
   log.textContent = data.log || '尚无运行日志。';
@@ -684,7 +690,7 @@ const stageFieldNames = { rfqId: 'RFQ ID', title: '标题', summary: '列表摘�
   missingRequired: '缺失规格', riskFlags: '风险提示', buyerQuestions: '待问买家的问题', quote: '报价规则结果', draft: '拟回复',
   productName: '商品名称', productDetails: '拟填规格', buyerMessage: '拟发给买家的回复', quoteStatus: '价格状态', submissionStatus: '提交状态',
   notificationStatus: '提醒状态', fileName: '本机草稿文件', note: '说明', records: '生成记录', savedRecords: '保存记录',
-  runScannedTotal: '本轮总扫描数', newCandidates: '进入分析数', output: '输出', input: '输入' };
+  runScannedTotal: '本轮总扫描数', newCandidates: '进入分析数', priceScreen: '价格可行性初筛', skipped: '无明确价格依据而跳过', reasons: '跳过原因', no_price_rule: '没有价格规则', unknown_quantity: '列表数量未知', no_definite_price_tier: '数量不在明确价格档位', budgetSkipped: '超过本次分析上限', eligibleBeforeLimit: '上限前可分析数', paidAnalysisAttempts: '本次已分析数', paidAnalysisLimit: '本次分析上限', output: '输出', input: '输入' };
 function stageValue(value, depth = 0) {
   if (value == null || value === '') return '<span class="stage-missing">未记录</span>';
   if (typeof value !== 'object') return `<span class="stage-value">${esc(value)}</span>`;
@@ -698,7 +704,7 @@ function renderStageEvidence(data) {
     <div class="stage-io"><section><h4>输入</h4>${stageValue(data.input)}</section><section><h4>输出</h4>${stageValue(data.output)}</section></div>`;
 }
 
-const quoteStatusNames = { quoted: '规则价已确认', needs_review: '需要人工复核', conditional_quote: '条件报价', submitted: '已提交', filled_not_submitted: '已回填，未提交', plugin_prepared_not_submitted: '已分析，未提交', dry_run_not_submitted: '试跑，未提交', skipped: '未联系' };
+const quoteStatusNames = { quoted: '规则价已确认', needs_review: '待确认价格或规格', conditional_quote: '有金额，条件待确认', submitted: '已确认提交成功', filled_not_submitted: '已填报价表，未提交', plugin_prepared_not_submitted: '已分析，未提交', dry_run_not_submitted: '试跑，未提交', skipped: '未联系' };
 const quoteCategoryNames = { kraft_food_bag: '食品牛皮纸袋', tumbler_40oz: '40oz 保温杯', corrugated_rsc: '瓦楞运输箱', paper_shopping_bag: '纸质购物袋', cloth_bag: '布袋', folding_carton: '折叠纸盒', unsupported: '暂不支持' };
 const quoteRecommendationNames = { quote: '可进入报价复核', review: '需要人工复核', skip: '暂不报价' };
 const reasonMap = [
@@ -717,16 +723,215 @@ const reasonMap = [
 function quoteReason(reason) { return reasonMap.find(([original]) => reason.startsWith(original))?.[1] || reason; }
 function quoteMoney(value) { return value == null ? '—' : `$${fmt(value, 4)}`; }
 const quoteDateKey = (value) => { const date = new Date(value); return Number.isFinite(date.getTime()) ? date.toLocaleDateString('sv-SE') : ''; };
-const definiteQuotes = () => (state.quotes?.drafts || []).filter((draft) => draft.definiteQuote === true);
-const quoteEmptyMessage = () => definiteQuotes().length
-  ? '当前筛选没有符合条件的明确报价，请调整搜索、品类或提交进度。'
-  : '当前没有可展示的明确报价。仅当价格规则确认金额，并生成完整拟回复后，RFQ 才会出现在这里。';
+const quoteSubmissionSummary = (status) => status === 'submitted' ? '已确认提交成功'
+  : ['not_submitted', 'skipped', 'plugin_prepared_not_submitted', 'dry_run_not_submitted'].includes(status) ? '未向买家提交' : '提交状态待核对';
+function priceApprovalForm(row) {
+  const risks = [...(row.missingRequired || []).map((value) => `待补规格：${value}`), ...(row.riskFlags || [])];
+  const today = quoteDateKey(new Date());
+  return `<details class="price-approval"><summary>已有核实的当前售价？建立本地报价草稿 ↗</summary>
+    <p>只接受你已经确认可用于这条 RFQ 的美元销售单价；历史报价不会自动填入。当前仅支持 EXW，数量固定为买家需求中的 ${esc(row.buyerQuantity ?? '未识别')} 件。保存不会操作浏览器。</p>
+    ${risks.length ? `<div class="price-approval-risks"><strong>原分析尚待核对</strong><ul>${risks.map((risk) => `<li>${esc(risk)}</li>`).join('')}</ul></div>` : ''}
+    <form data-approve-price="${esc(row.id)}">
+      ${state.priceImport.has(row.rfqId) ? `<p class="price-import-notice">已读取这条 RFQ 的填回清单。先核对买家原文与供应商现价，再带入表单；带入后仍需勾选并输入 RFQ ID。</p><button type="button" data-use-price-import="${esc(row.id)}" class="light">带入清单中的现价</button>` : ''}
+      <div class="price-approval-fields"><label>当前销售单价 · USD / 件<input name="unitPriceUsd" type="number" min="0.0001" max="10000" step="0.0001" required></label>
+        <label>报价有效至<input name="validThrough" type="date" min="${today}" required></label></div>
+      <label>价格覆盖的具体商品规格与条件<textarea name="specification" minlength="20" maxlength="1000" required placeholder="尺寸、材质、克重、印刷、包装、数量等；说明与买家 RFQ 的一致性"></textarea></label>
+      <label>当前售价的核实依据 · 仅保存在本机<textarea name="sourceNote" minlength="15" maxlength="500" required placeholder="供应商或内部批准的报价编号、确认日期；不要填写密码"></textarea></label>
+      ${(row.riskFlags || []).length ? `<label>原分析风险的逐项处理说明<textarea name="riskResolution" minlength="30" maxlength="2000" required placeholder="逐项写明如何核实：例如买家是否接受 EXW、印刷和配件是否计入售价、图片或冲突规格如何确认。未解决的风险不要勾选确认。"></textarea></label>` : ''}
+      ${(row.missingRequired || []).length ? `<div class="price-missing-review"><strong>逐项确定原分析中的缺失规格</strong><p>已有买家确认时填写确认值；也可以给出本次售价覆盖的供应商方案。建议方案会明确写进买家回复，供买家决定是否接受。不能用未核实的历史规格代填。</p>
+        ${row.missingRequired.map((field, index) => `<div class="price-missing-item"><strong>${esc(field)}</strong><label>依据<select name="missingSource-${index}" required><option value="buyer_confirmed">买家已确认</option><option value="supplier_proposal">我方建议规格</option></select></label><label>本次报价采用的具体值<input name="missingValue-${index}" minlength="4" maxlength="120" placeholder="例如：120 gsm 牛皮纸" required></label></div>`).join('')}</div>` : ''}
+      <label class="price-approval-check"><input name="approved" type="checkbox" required>我已核对原始 RFQ、上述风险、当前销售单价和 EXW 条件；该价格可用于这条 RFQ</label>
+      <label>输入完整 RFQ ID 确认<input name="rfqId" type="text" autocomplete="off" placeholder="${esc(row.rfqId)}" required></label>
+      <button type="submit" ${row.buyerQuantity ? '' : 'disabled'}>保存为待审核报价草稿</button><p class="price-approval-error" role="alert"></p>
+    </form></details>`;
+}
+function matchingPriceOpportunities() {
+  return matchingQuotes().filter((row) => !row.definiteQuote && !row.archivedAt);
+}
+
+// RFQ 标题和买家原文来自外部网页。CSV 即便由本机下载，随后也可能在
+// Excel/Numbers 打开，所以先阻止公式注入；报价列始终为空，历史价格
+// 和模型推断的价格都不能冒充供应商当前确认的销售单价。
+function inquiryCsvCell(value) {
+  let cell = String(value ?? '').slice(0, 8000);
+  if (/^[\s\u0000-\u001f]*[=+\-@]/u.test(cell)) cell = `'${cell}`;
+  return `"${cell.replaceAll('"', '""')}"`;
+}
+function exportPriceOpportunities() {
+  const rows = matchingPriceOpportunities();
+  const status = $('#price-opportunity-export-status');
+  if (!rows.length) { status.textContent = '当前筛选没有待核价 RFQ，请调整搜索或范围。'; return; }
+  const header = ['RFQ ID', '产品', 'Alibaba RFQ 链接', '品类', '采购数量', '买家原始需求',
+    '已提取规格', '待补规格', '待复核风险', '供应商询价草稿',
+    '当前销售单价 USD/件（待填）', '有效期 YYYY-MM-DD（待填）', '售价来源和确认日期（待填）', '价格覆盖规格（待填）', '原分析风险处理说明（待填）'];
+  const data = rows.map((row) => [row.rfqId, row.title, safeAlibabaUrl(row.detailUrl) || '',
+    quoteCategoryNames[row.categoryId] || row.categoryId, row.buyerQuantity || '', row.buyerRequirement || row.summary || '',
+    Object.entries(row.analysisFields || {}).map(([key, value]) => `${key}: ${value}`).join('; '),
+    (row.missingRequired || []).join('; '), (row.riskFlags || []).join('; '), row.quoteReadiness?.supplierInquiry || '',
+    '', '', '', '', '']);
+  const csv = '\uFEFF' + [header, ...data].map((items) => items.map(inquiryCsvCell).join(',')).join('\r\n') + '\r\n';
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url; link.download = `RFQ-待核价-${quoteDateKey(new Date()) || 'today'}.csv`;
+  document.body.append(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  status.textContent = `已导出 ${rows.length} 条待确认价格或规格的 RFQ。价格列留空；收到现价后，在对应 RFQ 中逐条核对并录入。`;
+}
+async function importPriceOpportunities(file) {
+  const status = $('#price-opportunity-export-status');
+  if (!file) return;
+  if (file.size > 2_000_000) { status.textContent = '清单超过 2 MB，请分批导入。'; return; }
+  try {
+    const parsed = RfqPriceCsv.parse(await file.text());
+    const known = new Set(quoteRows().filter((row) => !row.definiteQuote && !row.archivedAt).map((row) => row.rfqId));
+    const matched = parsed.filled.filter((row) => known.has(row.rfqId));
+    state.priceImport = new Map(matched.map((row) => [row.rfqId, row]));
+    if (matched.length) {
+      state.quoteQuery = matched[0].rfqId;
+      state.quoteStatusFilter = 'all';
+      state.quoteCategoryFilter = 'all';
+      state.quoteDateFrom = '';
+      state.quoteDateTo = '';
+      $('#quote-search').value = state.quoteQuery;
+      $('#quote-status-filter').value = 'all';
+      $('#quote-category-filter').value = 'all';
+      $('#quote-date-from').value = '';
+      $('#quote-date-to').value = '';
+      await renderFilteredQuotes(true);
+    }
+    status.textContent = `读取 ${parsed.total} 条：${matched.length} 条填有完整现价且匹配当前 RFQ${parsed.errors.length ? `，${parsed.errors.length} 条格式待修正（${parsed.errors[0]}）` : ''}${parsed.filled.length - matched.length ? `，${parsed.filled.length - matched.length} 条不属于当前工作区` : ''}。已定位首条匹配记录；仅带入表单，未保存或提交报价。`;
+  } catch (error) { status.textContent = `读取失败：${error.message}`; }
+}
+function renderPriceOpportunities() {
+  const container = $('#price-opportunity-list');
+  if (!container) return;
+  const rows = (state.quotes?.drafts || []).filter((row) => row.id === state.quoteSelected && !row.definiteQuote);
+  container.innerHTML = rows.length ? rows.map((row) => {
+    const references = row.priceOpportunity?.references || [];
+    const benchmarks = row.priceOpportunity?.benchmarks || [];
+    const priceMemoryLeads = row.priceMemoryLeads || [];
+    const detailUrl = safeAlibabaUrl(row.detailUrl);
+    return `<section class="price-opportunity-row"><h4>核价线索与下一步</h4>
+      <div class="price-opportunity-body"><p><b>买家原始需求：</b>${detailUrl ? `<a href="${esc(detailUrl)}" target="_blank" rel="noopener noreferrer">打开 Alibaba RFQ ↗</a>` : '原始链接未保存'}</p>
+        <div class="price-opportunity-buyer">${esc(row.buyerRequirement || row.summary || '请在买家 RFQ 原文中核对具体规格与数量。')}</div>
+        <p><b>模型建议：</b>${esc(quoteRecommendationNames[row.recommendation] || row.recommendation || '未记录')}；${(row.missingRequired || []).length ? `${row.missingRequired.length} 项规格待补` : '没有列出缺失规格'}；${(row.riskFlags || []).length} 项风险待核对。此处只排核价顺序，不代表可直接向买家报价。</p>
+        ${row.quoteStatus === 'needs_review' && !row.priceExpired ? `<div class="price-reanalysis"><button type="button" class="light" data-reanalyze="${esc(row.id)}">用当前 Skill 重新分析</button><span>保留原稿；重新调用需求分析模型并更新核价判断，会产生少量模型用量。不会打开浏览器或发送报价。</span><small role="status"></small></div>` : ''}
+        <p class="price-opportunity-blocker"><b>目前未形成明确报价：</b>${esc(row.quoteReadiness?.reason || row.reason || '当前价格尚未核实。')} 还需核实适用于本次 RFQ 的销售单价和有效期。</p>
+        ${(row.quoteReadiness?.missing?.length || row.quoteReadiness?.risks?.length || row.quoteReadiness?.buyerQuestions?.length) ? `<details class="price-opportunity-checklist"><summary>查看待补规格、风险与买家问题</summary>
+          ${row.quoteReadiness.missing?.length ? `<h4>待补规格</h4><ul>${row.quoteReadiness.missing.map((item) => `<li>${esc(item)}</li>`).join('')}</ul>` : ''}
+          ${row.quoteReadiness.risks?.length ? `<h4>待复核风险</h4><ul>${row.quoteReadiness.risks.map((item) => `<li>${esc(item)}</li>`).join('')}</ul>` : ''}
+          ${row.quoteReadiness.buyerQuestions?.length ? `<h4>可向买家确认</h4><ul>${row.quoteReadiness.buyerQuestions.map((item) => `<li>${esc(item)}</li>`).join('')}</ul>` : ''}
+        </details>` : ''}
+        <p class="price-opportunity-warning">${row.priceExpired ? `此前核实的售价已于 ${esc(row.priceValidThrough || '未知日期')} 过期，须重新确认。` : priceMemoryLeads.length ? '曾为另一条 RFQ 核实过同品类、同数量及相同已提取规格的售价。请重新确认本次工艺、供应商、条款与有效期；不会自动套价或回填。' : references.length ? '历史单价仅供寻找供应商和核价，不能直接给买家发送或自动回填。' : benchmarks.length ? '以下仅是同品类历史案例，规格或数量存在差异，不能推算本次售价，也不能填入报价表。' : '没有可比的历史报价。须取得当前供应商或内部批准的销售价格。'}</p>
+        ${priceMemoryLeads.map((lead) => `<div class="price-reference price-verified-lead"><strong>其他 RFQ 已核实售价 · ${esc(lead.title || lead.rfqId)}</strong>
+          <dl><div><dt>原单价</dt><dd>${esc(quoteMoney(lead.unitPriceUsd))} / 件</dd></div><div><dt>数量</dt><dd>${esc(lead.quantity)}</dd></div><div><dt>条款</dt><dd>${esc(lead.currency)} ${esc(lead.tradeTerm)}</dd></div><div><dt>原报价有效至</dt><dd>${esc(lead.validThrough)}</dd></div></dl>
+          <small>原 RFQ：${esc(lead.rfqId)} · 核实于 ${esc(localTime(lead.approvedAt))}</small><small>原规格：${esc(lead.specification)}</small><small>原价格依据：${esc(lead.sourceNote)}</small><small>这条价格只获批用于原 RFQ。本次须重新核实并逐单确认。</small>
+        </div>`).join('')}
+        ${references.map((ref) => `<div class="price-reference"><strong>${esc(ref.description || ref.title)}</strong>
+          <dl><div><dt>历史单价</dt><dd>${esc(quoteMoney(ref.unitPriceUsd))} / 件</dd></div><div><dt>历史数量</dt><dd>${esc(ref.quantity)}</dd></div><div><dt>贸易条款</dt><dd>${esc(ref.tradeTerm)}</dd></div><div><dt>报价日期</dt><dd>${esc(ref.date)}</dd></div></dl>
+          <small>匹配依据：${esc((ref.signals || []).join('、') || '品类相近')}</small><small>待核对：${esc((ref.differences || []).join('；'))}</small><small>来源：${esc(ref.sourceId)}${ref.sheet ? ` · ${esc(ref.sheet)}` : ''}${ref.cell ? ` · ${esc(ref.cell)}` : ''}</small>
+        </div>`).join('')}
+        ${benchmarks.map((ref) => `<div class="price-reference price-benchmark"><strong>同品类历史案例 · ${esc(ref.productName || ref.title)}</strong>
+          <dl><div><dt>当时单价</dt><dd>${esc(quoteMoney(ref.unitPriceUsd))} / 件</dd></div><div><dt>历史数量</dt><dd>${esc(ref.quantity)}</dd></div><div><dt>历史条款</dt><dd>${esc(ref.tradeTerm)}</dd></div><div><dt>日期</dt><dd>${esc(ref.date)}</dd></div></dl>
+          <small>与本次差异：${esc((ref.differences || []).join('；'))}</small><small>来源：${esc(ref.sourceId)}${ref.sheet ? ` · ${esc(ref.sheet)}` : ''}${ref.cell ? ` · ${esc(ref.cell)}` : ''}</small>
+        </div>`).join('')}
+        <p><b>下一步：</b>${esc(row.priceOpportunity?.nextAction || '向供应商确认现价与有效期。')}</p>
+        ${row.quoteReadiness?.supplierInquiry ? `<details class="supplier-inquiry"><summary>准备供应商询价清单</summary><p>这里只准备可复制的草稿，不会联系供应商。发送前核对买家需求、附件和贸易条款；历史单价没有写入清单。</p><textarea readonly aria-label="供应商询价草稿">${esc(row.quoteReadiness.supplierInquiry)}</textarea><button type="button" data-copy-inquiry="${esc(row.id)}">复制询价清单</button><span class="supplier-inquiry-status" role="status"></span></details>` : ''}
+        ${priceApprovalForm(row)}</div></section>`;
+  }).join('') : '';
+  container.querySelectorAll('[data-use-price-import]').forEach((button) => button.addEventListener('click', () => {
+    const row = rows.find((entry) => entry.id === button.dataset.usePriceImport);
+    const imported = row && state.priceImport.get(row.rfqId);
+    const form = button.closest('form');
+    if (!imported || !form) return;
+    for (const key of ['unitPriceUsd', 'validThrough', 'sourceNote', 'specification', 'riskResolution']) {
+      const field = form.elements.namedItem(key);
+      if (field) field.value = imported[key] || '';
+    }
+    // Never carry over an approval, RFQ confirmation, or a previous form's
+    // revision hash from CSV. The operator must review the current record.
+    form.elements.namedItem('approved').checked = false;
+    form.elements.namedItem('rfqId').value = '';
+    form.querySelector('.price-approval-error').textContent = '已带入待核对；请逐项确认风险、规格、现价和有效期。';
+  }));
+  container.querySelectorAll('[data-reanalyze]').forEach((button) => button.addEventListener('click', async () => {
+    const row = rows.find((entry) => entry.id === button.dataset.reanalyze);
+    if (!row) return;
+    const status = button.parentElement.querySelector('[role="status"]');
+    button.disabled = true;
+    status.textContent = '正在启动重新分析…';
+    try {
+      await opsRequest('/api/quotes/reanalyze', { id: row.id, reviewHash: row.reviewHash });
+      status.textContent = '已启动；下方任务状态会显示分析、价格检查和保存阶段。';
+      await updateOps();
+    } catch (error) { status.textContent = error.message; button.disabled = false; }
+  }));
+  container.querySelectorAll('[data-approve-price]').forEach((form) => form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const row = rows.find((entry) => entry.id === form.dataset.approvePrice);
+    if (!row) return;
+    const fields = new FormData(form);
+    const error = form.querySelector('.price-approval-error');
+    if (fields.get('rfqId')?.trim() !== row.rfqId) { error.textContent = 'RFQ ID 不匹配，请核对后再保存。'; return; }
+    const button = form.querySelector('button[type="submit"]');
+    button.disabled = true;
+    error.textContent = '正在保存本地草稿…';
+    try {
+      const result = await opsRequest('/api/quotes/approve-price', { id: row.id, rfqId: row.rfqId, reviewHash: row.reviewHash,
+        unitPriceUsd: Number(fields.get('unitPriceUsd')), validThrough: fields.get('validThrough'),
+        sourceNote: fields.get('sourceNote'), specification: fields.get('specification'),
+        riskResolution: fields.get('riskResolution') || '',
+        missingResolutions: (row.missingRequired || []).map((field, index) => ({ field,
+          source: fields.get(`missingSource-${index}`), value: fields.get(`missingValue-${index}`) })),
+        approved: fields.get('approved') === 'on' });
+      state.quoteStatusFilter = 'all'; state.quoteCategoryFilter = 'all'; state.quoteQuery = ''; state.quoteDateFrom = ''; state.quoteDateTo = '';
+      $('#quote-status-filter').value = 'all'; $('#quote-category-filter').value = 'all'; $('#quote-search').value = ''; $('#quote-date-from').value = ''; $('#quote-date-to').value = '';
+      state.quoteSelected = result.id;
+      await loadQuotes();
+      $('#quote-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (failure) { error.textContent = failure.message; button.disabled = false; }
+  }));
+  container.querySelectorAll('[data-copy-inquiry]').forEach((button) => button.addEventListener('click', async () => {
+    const row = rows.find((entry) => entry.id === button.dataset.copyInquiry);
+    if (!row?.quoteReadiness?.supplierInquiry) return;
+    const section = button.closest('.supplier-inquiry');
+    const status = section.querySelector('.supplier-inquiry-status');
+    try {
+      await navigator.clipboard.writeText(row.quoteReadiness.supplierInquiry);
+      status.textContent = '已复制。请核对后再发给供应商。';
+    } catch {
+      const field = section.querySelector('textarea');
+      field.focus(); field.select();
+      status.textContent = '已选中清单，请按 Ctrl+C（Mac 为 ⌘C）复制。';
+    }
+  }));
+}
+const quoteRows = () => {
+  const seen = new Set();
+  return (state.quotes?.drafts || []).filter((row) => {
+    // 列表与上方漏斗都按 RFQ 去重。先标记最新记录，即使其不适合报价，
+    // 也不能让同一 RFQ 的旧条件金额重新冒充当前判断。
+    const key = row.rfqId || row.id;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return row.definiteQuote || (row.categoryId !== 'unsupported' &&
+      (['needs_review', 'conditional_quote'].includes(row.quoteStatus) || row.priceExpired) &&
+      !['submitted', 'attempting', 'needs_manual_review', 'filled_not_submitted'].includes(row.submissionStatus));
+  });
+};
+const quoteViewStatus = (row) => row.archivedAt ? 'archived' : row.submissionStatus === 'submitted' ? 'submitted'
+  : row.submissionStatus === 'filled_not_submitted' ? 'filled_not_submitted' : row.definiteQuote ? 'definite'
+    : row.quoteStatus === 'conditional_quote' ? 'conditional_quote' : 'needs_review';
+const quoteViewLabel = (row) => ({ archived: '已归档草稿', submitted: '已确认提交成功', filled_not_submitted: '已填报价表，未提交',
+  definite: '价格已确认，待审核', conditional_quote: '有金额，条件待确认', needs_review: '待确认价格或规格' })[quoteViewStatus(row)];
+const quoteEmptyMessage = () => quoteRows().length
+  ? '当前筛选没有符合条件的 RFQ，请调整搜索、状态、品类或日期。'
+  : '当前没有已保存的 RFQ 报价记录。运行扫描和分析后，相关需求会出现在这里。';
 function matchingQuotes() {
   const words = state.quoteQuery.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-  return definiteQuotes().filter((draft) => {
-    if (state.quoteStatusFilter === 'submitted' && draft.submissionStatus !== 'submitted') return false;
-    if (state.quoteStatusFilter === 'unsubmitted' && draft.submissionStatus === 'submitted') return false;
-    if (state.quoteStatusFilter === 'filled_not_submitted' && draft.submissionStatus !== 'filled_not_submitted') return false;
+  return quoteRows().filter((draft) => {
+    if (state.quoteStatusFilter === 'all' && draft.archivedAt) return false;
+    if (state.quoteStatusFilter !== 'all' && quoteViewStatus(draft) !== state.quoteStatusFilter) return false;
     if (state.quoteCategoryFilter !== 'all' && draft.categoryId !== state.quoteCategoryFilter) return false;
     const date = quoteDateKey(draft.createdAt);
     if (state.quoteDateFrom && (!date || date < state.quoteDateFrom)) return false;
@@ -736,21 +941,41 @@ function matchingQuotes() {
 }
 
 async function renderFilteredQuotes(refreshDetail = false) {
-  const all = definiteQuotes();
+  const all = quoteRows();
   const matched = matchingQuotes();
-  const active = matched.filter((draft) => !draft.archivedAt);
-  const submitted = active.filter((draft) => draft.submissionStatus === 'submitted');
-  const visible = matched.filter((draft) => Boolean(draft.archivedAt) === state.quoteShowArchived);
+  const visible = matched;
   const previous = state.quoteSelected;
   if (!visible.some((draft) => draft.id === state.quoteSelected)) state.quoteSelected = visible[0]?.id || '';
   $('#quote-workbench-grid').classList.toggle('is-empty', visible.length === 0);
   $('#quote-detail').hidden = visible.length === 0;
-  $('#quote-filter-count').textContent = `符合 ${visible.length} / ${all.filter((draft) => Boolean(draft.archivedAt) === state.quoteShowArchived).length} 条`;
-  renderSubmittedQuotes(submitted);
-  renderPricedQuotes(active);
+  $('#quote-filter-count').textContent = `符合 ${visible.length} / ${all.filter((draft) => state.quoteStatusFilter === 'archived' ? draft.archivedAt : !draft.archivedAt).length} 条`;
   renderQuoteList();
   if (refreshDetail || previous !== state.quoteSelected || (!state.quoteDetail && state.quoteSelected)) await loadQuoteDetail();
   else if (!state.quoteSelected) { state.quoteDetail = null; $('#quote-detail').innerHTML = `<div class="empty">${quoteEmptyMessage()}</div>`; }
+}
+
+function renderQuoteFunnel(funnel) {
+  const fields = ['analyzed', 'recommended', 'priority', 'priced', 'submitted'];
+  for (const field of fields) {
+    const value = funnel?.[field];
+    $(`#quote-funnel-${field}`).textContent = Number.isSafeInteger(value) && value >= 0 ? String(value) : '—';
+  }
+  const next = $('#quote-funnel-next');
+  if (!funnel || !Number.isSafeInteger(funnel.analyzed)) {
+    next.textContent = '暂时无法统计本机草稿的报价进度。';
+    return;
+  }
+  if (funnel.analyzed === 0) {
+    next.textContent = '尚无已分析的 RFQ。先运行一轮分析，再查看需要补买家规格还是核实当前售价。';
+    return;
+  }
+  next.textContent = `${funnel.buyerDetailsNeeded} 条建议核价的需求仍有待确定规格，可取得买家确认或提出明确的供货方案；${funnel.needsPrice} 条可优先核实当前售价，其中 ${funnel.riskReview} 条带有风险标记。优先核价不等于能够直接提交。`;
+  if (funnel.needsPrice > 0) {
+    const link = document.createElement('a');
+    link.href = '#drafts-title';
+    link.textContent = '查看 RFQ 报价记录 ↗';
+    next.append(' ', link);
+  }
 }
 
 async function loadQuotes() {
@@ -758,7 +983,8 @@ async function loadQuotes() {
     const response = await fetch('/api/quotes');
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     state.quotes = await response.json();
-    const drafts = definiteQuotes();
+    renderQuoteFunnel(state.quotes.funnel);
+    const drafts = quoteRows();
     const active = drafts.filter((draft) => !draft.archivedAt);
     $('#submitted-count').textContent = new Set(active.filter((draft) => draft.submissionStatus === 'submitted').map((draft) => draft.rfqId)).size;
     const categories = [...new Set(drafts.map((draft) => draft.categoryId).filter(Boolean))].sort();
@@ -768,55 +994,25 @@ async function loadQuotes() {
     const linkedDraft = new URL(location.href).searchParams.get('draft');
     if (state.quoteSelected === null && drafts.some((draft) => draft.id === linkedDraft)) {
       state.quoteSelected = linkedDraft;
-      state.quoteShowArchived = Boolean(drafts.find((draft) => draft.id === linkedDraft)?.archivedAt);
+      if (drafts.find((draft) => draft.id === linkedDraft)?.archivedAt) state.quoteStatusFilter = 'archived';
     }
-    $('#quote-count').textContent = `${active.length} 条明确报价 · ${active.filter((draft) => draft.submissionStatus === 'submitted').length} 条已验证提交`;
+    $('#quote-status-filter').value = state.quoteStatusFilter;
+    $('#quote-count').textContent = `${state.quotes.funnel?.analyzed ?? drafts.length} 条已分析 RFQ · ${active.length} 条可浏览记录 · ${active.filter((draft) => draft.definiteQuote).length} 条明确报价`;
     await renderFilteredQuotes(true);
   } catch (error) {
+    renderQuoteFunnel(null);
     $('#quote-list').innerHTML = `<div class="empty">无法读取报价草稿：${esc(error.message)}</div>`;
   }
 }
 
-function renderSubmittedQuotes(rows) {
-  $('#submitted-quotes-section').hidden = rows.length === 0;
-  $('#submitted-quote-list').innerHTML = rows.length ? rows.map((draft) => `<button type="button" class="submitted-quote-row" data-submitted-draft="${esc(draft.id)}">
-    <strong>${esc(draft.title)}</strong><small>RFQ ${esc(draft.rfqId)} · ${esc(draft.currency === 'USD' && Number.isFinite(draft.totalUsd) ? quoteMoney(draft.totalUsd) : '金额待核对')} · 提交于 ${esc(localTime(draft.submittedAt))}</small>
-  </button>`).join('') : '<p class="empty">目前没有已验证提交的明确报价。</p>';
-  $('#submitted-quote-list').querySelectorAll('[data-submitted-draft]').forEach((button) => button.addEventListener('click', async () => {
-    state.quoteShowArchived = false;
-    state.quoteSelected = button.dataset.submittedDraft;
-    state.quoteArchiveConfirm = false;
-    renderQuoteList();
-    await loadQuoteDetail();
-    $('#quote-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }));
-}
-
-function renderPricedQuotes(rows) {
-  $('#priced-quotes-section').hidden = rows.length === 0;
-  $('#priced-quote-list').innerHTML = rows.length ? rows.map((draft) => `<button type="button" class="submitted-quote-row" data-priced-draft="${esc(draft.id)}">
-    <strong>${esc(draft.title)}</strong><small>${esc(quoteMoney(draft.totalUsd))} · ${esc(quoteStatusNames[draft.quoteStatus] || draft.quoteStatus)} · ${draft.submissionStatus === 'submitted' ? '已提交' : '未提交'} · 生成于 ${esc(localTime(draft.createdAt))}</small>
-  </button>`).join('') : `<p class="empty">${quoteEmptyMessage()}</p>`;
-  $('#priced-quote-list').querySelectorAll('[data-priced-draft]').forEach((button) => button.addEventListener('click', async () => {
-    state.quoteShowArchived = false;
-    state.quoteSelected = button.dataset.pricedDraft;
-    renderQuoteList();
-    await loadQuoteDetail();
-    $('#quote-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }));
-}
-
 function renderQuoteList() {
-  const rows = matchingQuotes().filter((draft) => Boolean(draft.archivedAt) === state.quoteShowArchived);
-  const archived = definiteQuotes().filter((draft) => draft.archivedAt).length;
-  $('#quote-list-title').textContent = state.quoteShowArchived ? '已移出的明确报价' : '明确报价草稿';
-  $('#quote-show-archived').textContent = state.quoteShowArchived ? '返回当前草稿' : `查看已移出草稿（${archived}）`;
-  $('#quote-show-archived').disabled = archived === 0 && !state.quoteShowArchived;
+  const rows = matchingQuotes();
+  $('#quote-list-title').textContent = state.quoteStatusFilter === 'all' ? '当前 RFQ 记录' : $('#quote-status-filter').selectedOptions[0]?.textContent || 'RFQ 记录';
   $('#quote-list').innerHTML = rows.length ? rows.map((draft) => `<button type="button" data-draft="${esc(draft.id)}" class="quote-row ${state.quoteSelected === draft.id ? 'active' : ''}">
-    <span class="quote-row-top"><small>${esc(draft.rfqId)}</small><span class="pill ${draft.quoteStatus === 'quoted' ? '' : 'gray'}">${esc(quoteStatusNames[draft.quoteStatus] || draft.quoteStatus)}</span></span>
-    <strong>${esc(draft.title)}</strong>${draft.summary ? `<span class="quote-row-summary">${esc(draft.summary)}</span>` : ''}<small>生成于 ${esc(localTime(draft.createdAt))} · ${esc(quoteStatusNames[draft.submissionStatus] || draft.submissionStatus)}</small>
-    ${Number.isFinite(draft.totalUsd) && draft.currency === 'USD' ? `<small>${draft.quoteStatus === 'conditional_quote' ? '条件金额' : '规则报价'} ${esc(quoteMoney(draft.totalUsd))} · ${draft.submissionStatus === 'submitted' ? '已提交' : '未提交'}</small>` : ''}
-  </button>`).join('') : `<div class="empty">${state.quoteShowArchived ? '没有已移出的明确报价。' : quoteEmptyMessage()}</div>`;
+    <span class="quote-row-top"><small>${esc(draft.rfqId)}</small><span class="pill ${draft.definiteQuote ? '' : 'gray'}">${esc(quoteViewLabel(draft))}</span></span>
+    <span class="quote-row-main"><span class="quote-row-image">${draft.images?.length ? `<img loading="lazy" alt="${esc(draft.images[0].label)}" src="/api/quote/image?draft=${encodeURIComponent(draft.id)}&index=${draft.images[0].index}">` : '<span>无本地图片</span>'}</span><span class="quote-row-copy"><strong>${esc(draft.title)}</strong>${draft.summary ? `<span class="quote-row-summary">${esc(draft.summary)}</span>` : ''}<small>分析于 ${esc(localTime(draft.createdAt))}</small>${draft.images?.length ? `<small>买家图片 ${draft.images.length} 张</small>` : ''}</span></span>
+    ${draft.definiteQuote && Number.isFinite(draft.totalUsd) && draft.currency === 'USD' ? `<small>${draft.priceSource === 'operator_verified_sell_price' ? '核实报价' : '规则报价'} ${esc(quoteMoney(draft.totalUsd))}</small>` : draft.quoteStatus === 'conditional_quote' ? '<small>条件金额待核实</small>' : '<small>当前尚无可用销售报价</small>'}
+  </button>`).join('') : `<div class="empty">${quoteEmptyMessage()}</div>`;
   $('#quote-list').querySelectorAll('[data-draft]').forEach((button) => button.addEventListener('click', async () => {
     state.quoteSelected = button.dataset.draft;
     state.quoteReview = null;
@@ -857,14 +1053,20 @@ function renderQuoteButtons() {
 }
 
 function quoteFacts(detail) {
-  const entries = [['RFQ ID', detail.rfq.id], ['价格状态', quoteStatusNames[detail.quote.status] || detail.quote.status],
-    ['商品', detail.draft.productName || detail.rfq.title], ['数量', detail.quote.quantity ?? detail.rfq.quantityText], ['单价', quoteMoney(detail.quote.unitPriceUsd)],
-    ['一次性费用', quoteMoney(detail.quote.setupUsd || 0)], ['总价', quoteMoney(detail.quote.totalUsd)], ['贸易条款', detail.quote.tradeTerm], ['交货地点', detail.draft.port],
+  const conditional = detail.quote.status === 'conditional_quote';
+  const offeredSpecs = (detail.quote.priceEvidence?.specReview?.entries || []).filter((entry) => entry.source === 'supplier_proposal');
+  const entries = [['RFQ ID', detail.rfq.id], ['价格状态', detail.quote.priceEvidence?.kind === 'operator_verified_sell_price' ? offeredSpecs.length ? '核实售价 · 我方方案待买家接受' : '人工核实售价' : quoteStatusNames[detail.quote.status] || detail.quote.status],
+    ['商品', detail.draft.productName || detail.rfq.title], ['数量', detail.quote.quantity ?? detail.rfq.quantityText], [conditional ? '条件单价' : '单价', quoteMoney(detail.quote.unitPriceUsd)],
+    ['一次性费用', quoteMoney(detail.quote.setupUsd || 0)], [conditional ? '条件总价' : '总价', quoteMoney(detail.quote.totalUsd)], ['贸易条款', detail.quote.tradeTerm], ['交货地点', detail.draft.port],
     ['当前浏览器动作', quoteStatusNames[detail.submission.status] || detail.submission.status],
     ['买家发布时间', detail.rfq.publishedAt ? localTime(detail.rfq.publishedAt) : detail.rfq.publishedText || '无法识别'],
     ['草稿生成时间', localTime(detail.createdAt)], ['文件更新时间', localTime(detail.updatedAt)]];
   if (detail.submittedAt) entries.push(['实际提交时间', localTime(detail.submittedAt)]);
-  if (detail.archivedAt) entries.push(['移出列表时间', localTime(detail.archivedAt)]);
+  if (detail.quote.priceEvidence?.kind === 'operator_verified_sell_price') {
+    entries.push(['售价核实时间', localTime(detail.quote.priceEvidence.approvedAt)]);
+    entries.push(['售价有效至', detail.quote.priceEvidence.validThrough]);
+  }
+  if (detail.archivedAt) entries.push(['归档时间', localTime(detail.archivedAt)]);
   return `<div class="quote-facts">${entries.map(([name, value]) => `<div><span>${esc(name)}</span><strong>${esc(value ?? '—')}</strong></div>`).join('')}</div>`;
 }
 
@@ -874,6 +1076,7 @@ function quoteList(values, empty) {
 
 function quoteNarrative(detail) {
   const rfq = detail.rfq || {}, analysis = detail.analysis || {}, quote = detail.quote || {};
+  const reviewedSpecs = quote.priceEvidence?.specReview?.entries || [];
   const fields = Object.entries(analysis.fields || {}).filter(([, value]) => value !== null && value !== undefined && value !== '');
   const originalUrl = safeAlibabaUrl(rfq.detailUrl);
   const images = Array.isArray(detail.images) ? detail.images : [];
@@ -884,7 +1087,7 @@ function quoteNarrative(detail) {
       <div class="quote-original"><strong>RFQ 详情原文</strong><p>${esc(rfq.detailText || '原始需求正文未保存在这条记录中；请核对 Alibaba 页面。')}</p></div>
       <div class="quote-buyer-images"><strong>买家图片 · ${images.length} 张</strong>${images.length
         ? `<div class="quote-image-grid">${images.map((image, position) => `<button type="button" data-quote-image="${image.index}" aria-label="放大查看${esc(image.label)} ${position + 1}"><img loading="lazy" alt="${esc(image.label)} ${position + 1}" src="/api/quote/image?draft=${encodeURIComponent(detail.id)}&index=${image.index}"><span>${esc(image.label)} ${position + 1} · 点击放大</span></button>`).join('')}</div>`
-        : '<p>本次采集没有保存图片；可打开原始 RFQ 页面核对附件。</p>'}</div>
+        : `<p>${originalUrl ? '本次采集没有保存图片；可打开原始 RFQ 页面核对附件。' : '本次采集没有保存图片，且当前记录没有可用的原始页面链接。'}</p>`}</div>
     </section>
     <dialog class="quote-image-dialog" aria-label="查看买家图片"><button type="button" class="quote-image-close" aria-label="关闭图片">关闭 ×</button><img alt="放大的买家图片"><p></p></dialog>
     <section class="quote-review-section"><div class="quote-review-heading"><span>02 / ANALYSIS</span><h4>需求解析与待确认项</h4></div>
@@ -895,9 +1098,12 @@ function quoteNarrative(detail) {
       ${(analysis.riskFlags || []).length ? `<div class="quote-risk"><strong>风险提示</strong>${quoteList(analysis.riskFlags, '')}</div>` : ''}
     </section>
     <section class="quote-review-section"><div class="quote-review-heading"><span>03 / PRICE</span><h4>报价判断</h4></div>
-      <p class="quote-review-summary">${esc(quoteStatusNames[quote.status] || quote.status)} · ${quote.currency === 'USD' && Number.isFinite(quote.totalUsd) ? `参考总额 ${esc(quoteMoney(quote.totalUsd))}` : '尚无可用报价金额'} · ${detail.submission.status === 'submitted' ? '已验证提交' : '未向买家提交'}</p>
+      <p class="quote-review-summary">${esc(quote.priceEvidence?.kind === 'operator_verified_sell_price' ? '人工核实售价' : quoteStatusNames[quote.status] || quote.status)} · ${quote.currency === 'USD' && Number.isFinite(quote.totalUsd) ? `参考总额 ${esc(quoteMoney(quote.totalUsd))}` : '尚无可用报价金额'} · ${quoteSubmissionSummary(detail.submission.status)}</p>
       ${quote.reason ? `<div class="quote-message"><span>规则判断原因</span><p>${esc(quote.reason)}</p></div>` : ''}
-      ${quote.basis ? `<div class="quote-message"><span>价格依据 / 假设</span><p>${esc(quote.basis)}</p></div>` : ''}
+      ${quote.basis ? `<div class="quote-message"><span>${quote.priceEvidence?.kind === 'operator_verified_sell_price' ? '人工核实的适用规格' : '价格依据 / 假设'}</span><p>${esc(quote.basis)}</p></div>` : ''}
+      ${quote.priceEvidence?.kind === 'operator_verified_sell_price' ? `<div class="quote-message"><span>当前售价核实依据 · 仅供内部查看</span><p>${esc(quote.priceEvidence.sourceNote || '未记录')}</p></div>` : ''}
+      ${reviewedSpecs.length ? `<div class="quote-message"><span>原分析缺失规格的逐项处理</span><ul>${reviewedSpecs.map((entry) => `<li>${esc(entry.field)}：${esc(entry.value)} · ${entry.source === 'supplier_proposal' ? '我方建议规格，待买家接受' : '操作员记录买家已确认'}</li>`).join('')}</ul></div>` : ''}
+      ${quote.priceEvidence?.riskReview?.note ? `<div class="quote-message"><span>原分析风险的人工复核说明 · 仅供内部查看</span><p>${esc(quote.priceEvidence.riskReview.note)}</p></div>` : ''}
       ${(quote.missingFields || []).length ? `<div class="quote-risk"><strong>价格所缺条件</strong>${quoteList(quote.missingFields, '')}</div>` : ''}
     </section>
     <section class="quote-review-section"><div class="quote-review-heading"><span>04 / RESPONSE</span><h4>准备给买家的回复</h4></div>
@@ -907,17 +1113,71 @@ function quoteNarrative(detail) {
     </section>`;
 }
 
+function bindQuoteImages(container) {
+  const dialog = container.querySelector('.quote-image-dialog');
+  container.querySelectorAll('[data-quote-image]').forEach((button) => button.addEventListener('click', () => {
+    const image = button.querySelector('img');
+    dialog.querySelector('img').src = image.src;
+    dialog.querySelector('img').alt = image.alt;
+    dialog.querySelector('p').textContent = image.alt;
+    dialog.showModal();
+  }));
+  dialog.querySelector('.quote-image-close').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
+}
+
+async function importQuoteExample() {
+  const section = $('#quote-example');
+  const button = $('#quote-import-example');
+  section.hidden = false;
+  button.disabled = true;
+  $('#quote-example-source').textContent = '正在读取本机历史案例…';
+  $('#quote-example-detail').innerHTML = '<p class="empty">正在整理买家需求与报价判断…</p>';
+  try {
+    const response = await fetch('/api/quote/example');
+    const value = await response.json();
+    if (!response.ok) throw new Error(value.error || `HTTP ${response.status}`);
+    const detail = value.detail;
+    state.quoteExample = detail;
+    $('#quote-example-source').textContent = value.source === 'local_scan'
+      ? '来自本机历史分析记录；显示当时保存的真实 RFQ、价格判断与拟回复。'
+      : '内置真实扫描记录的脱敏摘录；买家标识和原始链接未随安装包提供。';
+    // 示例复用正式草稿的事实与过程视图，但刻意不渲染回填、提交或归档动作。
+    // 条件金额也只作为当时的判断展示，不计入明确报价或已提交数量。
+    $('#quote-example-detail').innerHTML = `<p class="quote-example-note">案例只读 · ${esc(quoteStatusNames[detail.quote.status] || detail.quote.status)} · ${quoteSubmissionSummary(detail.submission.status)}。载入预览不会修改报价数据，也不会操作浏览器。</p>
+      <div class="detail-top"><span class="kicker">RFQ CASE / ${value.source === 'local_scan' ? 'LOCAL' : 'REDACTED'}</span><span class="detail-id">${esc(detail.id)}</span></div>
+      <h3 class="quote-title">${esc(detail.rfq.title)}</h3>${quoteFacts(detail)}${quoteNarrative(detail)}`;
+    bindQuoteImages($('#quote-example-detail'));
+  } catch (error) {
+    state.quoteExample = null;
+    $('#quote-example-source').textContent = '案例载入失败';
+    $('#quote-example-detail').innerHTML = `<p class="empty">${esc(error.message)}</p>`;
+  } finally {
+    button.disabled = false;
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
 function renderQuoteDetail() {
   const detail = state.quoteDetail;
   if (!detail) return;
+  const row = (state.quotes?.drafts || []).find((item) => item.id === detail.id);
+  if (row && !row.definiteQuote) {
+    $('#quote-detail').innerHTML = `<div class="detail-top"><span class="kicker">RFQ PRICE REVIEW</span><span class="detail-id">${esc(detail.id)}</span></div>
+      <h3 class="quote-title">${esc(detail.rfq.title)}</h3><p class="quote-pending-note">${esc(quoteViewLabel(row))} · 当前尚无可提交的明确销售报价。下方历史价格只供询价和人工核实。</p>
+      ${quoteNarrative(detail)}<div id="price-opportunity-list" class="price-opportunity-list"></div>`;
+    bindQuoteImages($('#quote-detail'));
+    renderPriceOpportunities();
+    return;
+  }
   const reasons = detail.fillReasons.length ? detail.fillReasons : ['可审阅并回填浏览器表单'];
   const submitReasons = detail.submitReasons.length ? detail.submitReasons : ['回填证据已核对，可审阅提交'];
   const canArchive = ['not_submitted', 'skipped', 'plugin_prepared_not_submitted', 'dry_run_not_submitted'].includes(detail.submission.status);
   const archiveControls = detail.archivedAt
-    ? '<div class="quote-archive-actions"><p>这条草稿已从当前列表移出，原始文件和报价依据仍在本机。</p><button type="button" data-quote-archive="restore">恢复到当前草稿</button></div>'
-    : canArchive ? `<div class="quote-archive-actions"><p>这条草稿没有已验证的浏览器提交动作，可以从当前列表移出；原始证据保留，可随时恢复。</p>
-      ${state.quoteArchiveConfirm ? '<button type="button" data-quote-archive="cancel">取消</button><button type="button" class="danger" data-quote-archive="confirm">确认移出这条草稿</button>' : '<button type="button" class="danger" data-quote-archive="prompt">移出当前草稿列表</button>'}</div>`
-      : '<div class="quote-archive-actions"><p>这条记录涉及浏览器报价动作或状态不明，需保留核对，不能从列表移出。</p></div>';
+    ? '<div class="quote-archive-actions"><p>这条草稿已归档，原始文件和报价依据仍在本机。</p><button type="button" data-quote-archive="restore">恢复到当前记录</button></div>'
+    : canArchive ? `<div class="quote-archive-actions"><p>这条草稿尚未提交，可以归档；原始证据保留，可随时恢复。</p>
+      ${state.quoteArchiveConfirm ? '<button type="button" data-quote-archive="cancel">取消</button><button type="button" class="danger" data-quote-archive="confirm">确认归档这条草稿</button>' : '<button type="button" class="danger" data-quote-archive="prompt">归档这条草稿</button>'}</div>`
+      : '<div class="quote-archive-actions"><p>这条记录涉及浏览器报价动作或状态不明，需保留核对，不能归档。</p></div>';
   const review = state.quoteReview ? `<div class="quote-confirm" id="quote-confirm">
     <strong>${state.quoteReview === 'fill' ? '确认回填这一条 RFQ' : '确认向买家提交这一条报价'}</strong>
     <p>请核对上面的 RFQ、数量、单价、总价和完整买家留言；草稿在确认后发生变化将被拒绝。</p>
@@ -934,16 +1194,7 @@ function renderQuoteDetail() {
     <div class="quote-actions"><button type="button" class="light" data-quote-action="fill">审阅并回填</button><button type="button" class="primary" data-quote-action="submit">审阅并提交</button></div>${archiveControls}
     ${state.quoteArchiveError ? `<p class="ops-alert">${esc(state.quoteArchiveError)}</p>` : ''}${review}`;
   $('#quote-detail').querySelectorAll('[data-quote-action]').forEach((button) => button.addEventListener('click', () => { state.quoteReview = button.dataset.quoteAction; renderQuoteDetail(); $('#quote-confirm').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }));
-  const imageDialog = $('#quote-detail .quote-image-dialog');
-  $('#quote-detail').querySelectorAll('[data-quote-image]').forEach((button) => button.addEventListener('click', () => {
-    const image = button.querySelector('img');
-    imageDialog.querySelector('img').src = image.src;
-    imageDialog.querySelector('img').alt = image.alt;
-    imageDialog.querySelector('p').textContent = image.alt;
-    imageDialog.showModal();
-  }));
-  imageDialog.querySelector('.quote-image-close').addEventListener('click', () => imageDialog.close());
-  imageDialog.addEventListener('click', (event) => { if (event.target === imageDialog) imageDialog.close(); });
+  bindQuoteImages($('#quote-detail'));
   $('#quote-detail').querySelectorAll('[data-quote-archive]').forEach((button) => button.addEventListener('click', async () => {
     const action = button.dataset.quoteArchive;
     if (action === 'prompt' || action === 'cancel') { state.quoteArchiveConfirm = action === 'prompt'; renderQuoteDetail(); return; }
@@ -951,7 +1202,8 @@ function renderQuoteDetail() {
       state.quoteArchiveError = '';
       await opsRequest('/api/quotes/archive', { id: detail.id, archived: action === 'confirm' });
       state.quoteArchiveConfirm = false;
-      state.quoteShowArchived = false;
+      state.quoteStatusFilter = action === 'confirm' ? 'all' : 'definite';
+      $('#quote-status-filter').value = state.quoteStatusFilter;
       state.quoteSelected = action === 'confirm' ? '' : detail.id;
       await loadQuotes();
     } catch (error) { state.quoteArchiveError = error.message; renderQuoteDetail(); }
@@ -996,7 +1248,7 @@ async function updateOps() {
     }
     renderOps();
     const run = state.ops.run;
-    if (run && !['running', 'stopping', 'indexing'].includes(run.status) && state.lastFinishedRun !== run.id && ['refresh', 'once', 'watch', 'quote_fill', 'quote_submit'].includes(run.kind)) {
+    if (run && !['running', 'stopping', 'indexing'].includes(run.status) && state.lastFinishedRun !== run.id && ['refresh', 'once', 'watch', 'reanalyze', 'quote_fill', 'quote_submit'].includes(run.kind)) {
       state.lastFinishedRun = run.id;
       if (run.status === 'completed' || run.status === 'stopped') await reloadCatalog();
       await loadQuotes();
@@ -1092,13 +1344,15 @@ async function start() {
       const button = event.target.closest('[data-notification-draft]');
       if (button) void openNotificationDraft(button.dataset.notificationDraft);
     });
-    $('#quote-show-archived').addEventListener('click', async () => {
-      state.quoteShowArchived = !state.quoteShowArchived;
-      state.quoteSelected = '';
-      state.quoteArchiveConfirm = false;
-      await renderFilteredQuotes(true);
-    });
+    $('#quote-import-example').addEventListener('click', importQuoteExample);
+    $('#quote-example-close').addEventListener('click', () => { $('#quote-example').hidden = true; });
     $('#quote-search').addEventListener('input', (event) => { state.quoteQuery = event.target.value; void renderFilteredQuotes(); });
+    $('#price-opportunity-export').addEventListener('click', exportPriceOpportunities);
+    $('#price-opportunity-import').addEventListener('click', () => $('#price-opportunity-import-file').click());
+    $('#price-opportunity-import-file').addEventListener('change', (event) => {
+      void importPriceOpportunities(event.target.files?.[0]);
+      event.target.value = '';
+    });
     $('#quote-status-filter').addEventListener('change', (event) => { state.quoteStatusFilter = event.target.value; void renderFilteredQuotes(); });
     $('#quote-category-filter').addEventListener('change', (event) => { state.quoteCategoryFilter = event.target.value; void renderFilteredQuotes(); });
     $('#quote-date-from').addEventListener('change', (event) => { state.quoteDateFrom = event.target.value; void renderFilteredQuotes(); });

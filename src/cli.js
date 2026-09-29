@@ -32,10 +32,11 @@ async function main() {
   }
 
   if (command === "watch") {
+    const runBudget = { attempts: 0 };
     for (;;) {
       const started = new Date().toISOString();
       try {
-        console.log(JSON.stringify({ started, ...(await runCycle(config)) }, null, 2));
+        console.log(JSON.stringify({ started, ...(await runCycle(config, runBudget)) }, null, 2));
       } catch (error) {
         console.error(JSON.stringify({ started, error: error.message }));
         const requiresHuman = /CAPTCHA|verification challenge|login is required|login could not be verified|Cannot attach to the existing Chrome session through Chrome Bridge|内置浏览器|页面操作失败/i.test(error.message);

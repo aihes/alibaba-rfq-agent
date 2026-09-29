@@ -58,7 +58,11 @@ export function loadConfig() {
   return {
     ...defaults,
     searchTerms: parseList(process.env.SEARCH_TERMS, defaults.searchTerms),
-    recentRfqMinutes: parseRecentMinutes(process.env.RECENT_RFQ_MINUTES ?? defaults.recentRfqMinutes),
+    // Workspaces created before the publication-time filter have no saved
+    // recentRfqMinutes. A read-only local reanalysis must still load config;
+    // keep 60 minutes as the migration default while explicit values retain
+    // strict validation.
+    recentRfqMinutes: parseRecentMinutes(process.env.RECENT_RFQ_MINUTES ?? defaults.recentRfqMinutes ?? 60),
     navigationDelayMs: Number(process.env.NAVIGATION_DELAY_MS || defaults.navigationDelayMs),
     pricing: readJson("config/pricing-rules.json"),
     browserProvider: process.env.RFQ_DESKTOP === "1" ? "electron-cdp" : (process.env.BROWSER_PROVIDER || "chrome-bridge"),
@@ -72,6 +76,9 @@ export function loadConfig() {
     localClaudeStructuredOutput: process.env.LOCAL_CLAUDE_STRUCTURED_OUTPUT === "true",
     localClaudeTimeoutMs: Number(process.env.LOCAL_CLAUDE_TIMEOUT_MS || 120000),
     localClaudeMaxBudgetUsd: Number(process.env.LOCAL_CLAUDE_MAX_BUDGET_USD || 0.20),
+    // A watch process keeps one budget across all cycles. The screen in
+    // pipeline.js normally reduces this further, often to zero paid calls.
+    maxPaidAnalysesPerRun: Number(process.env.MAX_PAID_ANALYSES_PER_RUN ?? 3),
     anthropicApiKey: process.env.ANTHROPIC_API_KEY || "",
     anthropicModel: process.env.ANTHROPIC_HTTP_MODEL || "",
     anthropicApiUrl: process.env.ANTHROPIC_API_URL || "https://api.anthropic.com/v1/messages",
@@ -97,6 +104,7 @@ export function loadConfig() {
     autoContactDailyLimit: Number(process.env.AUTO_CONTACT_DAILY_LIMIT || 3),
     autoContactMaxTotalUsd: Number(process.env.AUTO_CONTACT_MAX_TOTAL_USD || 2500),
     autoContactAck: process.env.AUTO_CONTACT_ACK || "",
+    manualOperatorQuote: process.env.RFQ_MANUAL_OPERATOR_QUOTE === "1",
     autoContactAllowFixtureUrls: false
   };
 }

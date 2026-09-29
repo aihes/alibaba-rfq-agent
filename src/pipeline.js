@@ -10,10 +10,17 @@ import { notifyOpportunity } from "./notifications.js";
 import { reportProgress, reportProgressResult } from "./progress.js";
 import { appendJsonl, loadState, saveState, sleep, writeJson } from "./utils.js";
 import { publishedWithinMinutes } from "./rfq-time.js";
+import { assessPriceOpportunity, loadHistoricalCaseQuotes } from "./price-opportunity.js";
+import { findVerifiedPriceLeads, loadVerifiedPriceLeads } from "./price-memory.js";
+import { projectDir } from "./paths.js";
+import { assessQuoteReadiness } from "./quote-readiness.js";
+import { screenPriceCandidates } from "./price-gate.js";
 
-export async function runCycle(config) {
+export async function runCycle(config, runBudget = { attempts: 0 }) {
   const cycleStartedAt = new Date().toISOString();
   const state = loadState();
+  const historicalPrices = loadHistoricalCaseQuotes();
+  const verifiedPrices = loadVerifiedPriceLeads(projectDir);
   const connectStage = reportProgress("connect", "正在连接应用内浏览器", {}, { target: "应用内 Alibaba 浏览器", task: "读取 RFQ；不提交报价" });
   const { browser, page, createdPage } = await connectBrowser(config);
   reportProgressResult(connectStage, { connected: true, pageReady: true });
@@ -33,21 +40,34 @@ export async function runCycle(config) {
     // 每张卡片的相对发布时间以它被读取的时刻为基准；跨多个品类的
     // 一轮扫描可能持续很久，不能再用整轮开始时间判断它是否够新。
     const recent = unique.filter((rfq) => publishedWithinMinutes(rfq, config.recentRfqMinutes, new Date(rfq.collectedAt)));
-    const candidates = recent
+    const matching = recent
       .filter((rfq) => !state.seen[rfq.id])
       .map((rfq) => ({ rfq, prefilter: keywordPrefilter(rfq, config.supportedCategories) }))
       .filter((entry) => entry.prefilter.length > 0);
-    const filterStage = reportProgress("filter", `扫描到 ${unique.length} 条 RFQ，${candidates.length} 条进入分析`,
+    const screened = screenPriceCandidates(matching, config.pricing);
+    const maxPaidAnalyses = Math.max(0, Number(config.maxPaidAnalysesPerRun) || 0);
+    const remaining = Math.max(0, maxPaidAnalyses - runBudget.attempts);
+    const candidates = screened.eligible.slice(0, remaining);
+    const budgetSkipped = screened.eligible.length - candidates.length;
+    const filterStage = reportProgress("filter", `扫描到 ${unique.length} 条 RFQ；${screened.skipped.length} 条无明确价格依据，${candidates.length} 条进入分析`,
       { itemIndex: 0, itemTotal: candidates.length },
       { scanned: collected.length, unique: unique.length, recent: recent.length,
         unknownPublishedAt: unique.filter((rfq) => !rfq.publishedAt).length,
-        recentRfqMinutes: config.recentRfqMinutes, previouslySeen: Object.keys(state.seen).length });
+        recentRfqMinutes: config.recentRfqMinutes, previouslySeen: Object.keys(state.seen).length,
+        matchedCategories: matching.length, paidAnalysisLimit: maxPaidAnalyses,
+        paidAnalysisAttempts: runBudget.attempts });
     reportProgressResult(filterStage, { candidates: candidates.map(({ rfq, prefilter }) =>
       ({ id: rfq.id, title: rfq.title, summary: rfq.summary, publishedText: rfq.publishedText,
-        publishedAt: rfq.publishedAt, prefilter })) });
+        publishedAt: rfq.publishedAt, prefilter })),
+      priceScreen: { skipped: screened.skipped.length, reasons: screened.reasons,
+        budgetSkipped, eligibleBeforeLimit: screened.eligible.length,
+        note: "价格筛选只用列表信息；跳过的 RFQ 未调用 OCR 或模型，也不会标记为已处理。" } });
 
     const records = [];
     for (const [index, { rfq, prefilter }] of candidates.entries()) {
+      // 同一个 CLI 进程的 watch 轮次共享预算。先占名额再进入详情，OCR
+      // 或模型失败也计一次，避免失败 RFQ 在下一轮反复产生费用。
+      runBudget.attempts++;
       const processingStartedAt = new Date().toISOString();
       const detailStartedAt = new Date().toISOString();
       const detailStage = reportProgress("detail", "正在读取 RFQ 详情与附件", { itemIndex: index + 1, itemTotal: candidates.length },
@@ -68,7 +88,10 @@ export async function runCycle(config) {
         { rfqId: hydrated.id, quantity: hydrated.quantity, categoryId: analysis.categoryId, fields: analysis.fields,
           missingRequired: analysis.missingRequired, riskFlags: analysis.riskFlags });
       const quote = priceRfq(hydrated, analysis, config.pricing);
-      reportProgressResult(pricingStage, { rfqId: hydrated.id, quote });
+      const priceOpportunity = assessPriceOpportunity(hydrated, analysis, quote, historicalPrices);
+      const priceMemoryLeads = findVerifiedPriceLeads(hydrated, analysis, verifiedPrices);
+      const quoteReadiness = assessQuoteReadiness({ rfq: hydrated, analysis, quote });
+      reportProgressResult(pricingStage, { rfqId: hydrated.id, quote, priceOpportunity, priceMemoryLeads, quoteReadiness });
       const pricingCompletedAt = new Date().toISOString();
       const draftStartedAt = new Date().toISOString();
       const draftStage = reportProgress("draft", "正在生成报价草稿", { itemIndex: index + 1, itemTotal: candidates.length },
@@ -83,6 +106,9 @@ export async function runCycle(config) {
         prefilter,
         analysis,
         quote,
+        priceOpportunity,
+        priceMemoryLeads,
+        quoteReadiness,
         draft,
         agentInput: buildAgentInputAudit(config, hydrated, analysis, quote, draft),
         timing: {
@@ -137,10 +163,13 @@ export async function runCycle(config) {
       });
     }
     saveState(state);
-    const completeStage = reportProgress("complete", `本轮完成：扫描 ${unique.length} 条，生成 ${records.length} 份记录`,
-      { itemIndex: records.length, itemTotal: candidates.length }, { scanned: unique.length, candidates: candidates.length });
+    const completeStage = reportProgress("complete", `本轮完成：扫描 ${unique.length} 条，跳过 ${screened.skipped.length} 条无明确价格依据的需求，分析 ${candidates.length} 条`,
+      { itemIndex: records.length, itemTotal: candidates.length }, { scanned: unique.length, candidates: candidates.length,
+        priceSkipped: screened.skipped.length, budgetSkipped });
     reportProgressResult(completeStage, { records: records.map(({ id, title, quoteStatus, contactStatus }) =>
-      ({ id, title, quoteStatus, contactStatus })) });
+      ({ id, title, quoteStatus, contactStatus })), priceScreen: {
+        skipped: screened.skipped.length, reasons: screened.reasons, budgetSkipped,
+        paidAnalysisAttempts: runBudget.attempts, paidAnalysisLimit: maxPaidAnalyses } });
     const cycleCompletedAt = new Date().toISOString();
     return {
       cycleStartedAt,
@@ -148,6 +177,8 @@ export async function runCycle(config) {
       cycleDurationMs: Date.parse(cycleCompletedAt) - Date.parse(cycleStartedAt),
       scanned: unique.length,
       newCandidates: candidates.length,
+      priceScreen: { skipped: screened.skipped.length, reasons: screened.reasons, budgetSkipped,
+        paidAnalysisAttempts: runBudget.attempts, paidAnalysisLimit: maxPaidAnalyses },
       records
     };
   } finally {

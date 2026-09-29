@@ -21,4 +21,6 @@ test("only a confirmed rule price with complete buyer-facing content enters the 
   assert.equal(hasDefiniteQuote(blankMessage), false);
   const inconsistent = record(); inconsistent.quote.totalUsd = 300;
   assert.equal(hasDefiniteQuote(inconsistent), false);
+  const unresolved = record(); unresolved.analysis = { missingRequired: ["gsm"] };
+  assert.equal(hasDefiniteQuote(unresolved), false);
 });

@@ -6,7 +6,7 @@ import AdmZip from "adm-zip";
 import { OperatorConsole } from "./console.js";
 import { BrowserExtension } from "./extension.js";
 import { createNotificationTools } from "../notification-tools.js";
-import { readQuoteImage } from "../quote-images.js";
+import { buyerRfqUrl, quoteImages, readQuoteImage } from "../quote-images.js";
 
 const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp" };
 const csp = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
@@ -43,6 +43,52 @@ export async function createCaseServer(options) {
     return catalog;
   };
   getCatalog();
+  // 案例预览只读：优先用用户本机真正分析过、含金额和回复的 RFQ。
+  // 新安装没有历史记录时，使用随安装包提供的脱敏真实案例。两者都不写入
+  // data/drafts，也不进入明确报价列表，更不会取得浏览器报价权限。
+  const getQuoteExample = async () => {
+    const directory = path.join(workspace, "data/drafts");
+    const candidates = fs.existsSync(directory) ? fs.readdirSync(directory)
+      .filter((name) => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}\.json$/.test(name))
+      .flatMap((name) => {
+        try {
+          const file = contained(path.join(directory, name), directory);
+          const record = JSON.parse(fs.readFileSync(file, "utf8"));
+          return record.rfq?.id && record.draft?.buyerMessage &&
+            ["quoted", "conditional_quote"].includes(record.quote?.status) &&
+            Number.isFinite(record.quote.totalUsd) && record.quote.totalUsd > 0
+            ? [{ id: name.slice(0, -5), record, updatedAt: fs.statSync(file).mtime.toISOString() }] : [];
+        } catch { return []; }
+      }).sort((a, b) => (b.record.quote.status === "quoted") - (a.record.quote.status === "quoted") ||
+        String(b.record.createdAt).localeCompare(String(a.record.createdAt))) : [];
+    if (candidates.length) {
+      const { id, record, updatedAt } = candidates[0];
+      const rfq = record.rfq;
+      return { source: "local_scan", detail: {
+        id, createdAt: record.createdAt, updatedAt,
+        rfq: { id: rfq.id, title: rfq.title, summary: rfq.summary, detailText: rfq.detailText,
+          detailUrl: buyerRfqUrl(rfq.detailUrl), quantityText: rfq.quantityText,
+          country: rfq.country, publishedAt: rfq.publishedAt, publishedText: rfq.publishedText,
+          collectedAt: rfq.collectedAt },
+        analysis: { categoryId: record.analysis?.categoryId, confidence: record.analysis?.confidence,
+          recommendation: record.analysis?.recommendation, fields: record.analysis?.fields,
+          missingRequired: record.analysis?.missingRequired, riskFlags: record.analysis?.riskFlags,
+          buyerQuestions: record.analysis?.buyerQuestions },
+        quote: { status: record.quote.status, currency: record.quote.currency, quantity: record.quote.quantity,
+          unitPriceUsd: record.quote.unitPriceUsd, setupUsd: record.quote.setupUsd,
+          totalUsd: record.quote.totalUsd, tradeTerm: record.quote.tradeTerm,
+          basis: record.quote.basis, reason: record.quote.reason,
+          missingFields: record.quote.missingFields },
+        draft: { productName: record.draft.productName, productDetails: record.draft.productDetails,
+          buyerMessage: record.draft.buyerMessage, port: record.draft.port },
+        submission: { status: record.submission?.status || "unknown" },
+        submittedAt: record.submission?.completedAt || record.timing?.submissionCompletedAt || null,
+        hasDraft: true, images: quoteImages(workspace, record)
+      } };
+    }
+    const file = path.join(resources, "src/examples/scanned-quote-case.json");
+    return { source: "bundled_redacted", detail: JSON.parse(fs.readFileSync(file, "utf8")) };
+  };
   const server = http.createServer(async (req, res) => {
     const address = server.address();
     const hosts = new Set([`127.0.0.1:${address.port}`, `localhost:${address.port}`]);
@@ -95,6 +141,8 @@ export async function createCaseServer(options) {
           result = await tools.call(payload.tool, payload.arguments);
         } else if (route === "/api/ops/start") result = console.start(payload);
         else if (route === "/api/quotes/archive") result = console.archiveQuote(payload);
+        else if (route === "/api/quotes/approve-price") result = await console.approvePrice(payload);
+        else if (route === "/api/quotes/reanalyze") result = console.reanalyzeDraft(payload);
         else if (route === "/api/ops/stop") { empty(); result = console.stop(); }
         else if (route === "/api/ops/settings") result = console.updateSettings(payload);
         else if (route === "/api/ops/quote/start") result = await console.startQuote(payload);
@@ -173,7 +221,7 @@ export async function createCaseServer(options) {
         return reply(200, result);
       }
       if (req.method !== "GET") return fail(405, "请求方法不支持");
-      if (["/", "/app.js", "/styles.css"].includes(route)) {
+      if (["/", "/app.js", "/price-csv.js", "/styles.css"].includes(route)) {
         const file = path.join(resources, "src/frontend", route === "/" ? "index.html" : route.slice(1));
         return reply(200, fs.readFileSync(file), mime[path.extname(file)]);
       }
@@ -192,6 +240,7 @@ export async function createCaseServer(options) {
       if (route === "/api/ops/stage") return reply(200, console.stageDetail(Number(url.searchParams.get("index"))));
       if (route === "/api/env/check") return reply(200, await console.envCheck(url.searchParams.get("force") === "1"));
       if (route === "/api/quotes") return reply(200, await console.listQuotes());
+      if (route === "/api/quote/example") return reply(200, await getQuoteExample());
       if (route === "/api/quote/image") {
         const index = url.searchParams.get("index");
         const image = /^(0|[1-9]\d*)$/.test(index || "")
