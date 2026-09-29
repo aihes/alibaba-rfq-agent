@@ -1,9 +1,8 @@
-# Cloudflare Claude Code deployment probe
+# Cloudflare GLM service and Claude Code probe
 
-This isolated Worker verifies that Claude Code can start inside a Cloudflare
-Container and make one fixed GLM inference request. It does not accept arbitrary
-prompts or commands, contain an API key in source, or connect the RFQ desktop app
-to a remote service. It is deployed at `https://glm.knowflow.work/` and
+This Worker exposes authenticated agent and OCR APIs while retaining the earlier
+fixed Claude Code probe. API keys stay in Cloudflare secrets; the RFQ desktop app
+has not yet been switched to these remote APIs. It is deployed at `https://glm.knowflow.work/` and
 `https://claude-probe.knowflow.work/` on the account with Containers access.
 
 The Worker uses the public `node:22-slim` image. On the first authorized
@@ -11,18 +10,97 @@ request of each container lifetime, it installs the pinned Anthropic Claude Code
 npm package and runs a version check. `GET /version` returns that version.
 `POST /test-model` runs a fixed prompt through `GLM-5.3[1m]` using the same
 Anthropic-compatible endpoint configured locally. It disables Claude's tools
-and session persistence. The Worker destroys the container after each check,
-with 45-second idle sleep as a fallback. Each cold start installs the package
-again because the container filesystem is ephemeral.
+and session persistence. The legacy probe and Agent API share one container
+instance because this deployment allows only one running instance. It sleeps
+after 45 seconds of inactivity. Each cold start installs the package again
+because the container filesystem is ephemeral.
 
-`PROBE_TOKEN` and `GLM_API_KEY` must be configured as Cloudflare Worker secrets.
+`PROBE_TOKEN`, `GLM_API_KEY`, and `SERVICE_GLM_API_KEY` must be configured as
+Cloudflare Worker secrets. `SERVICE_GLM_API_KEY` is a standard API key used
+with `api.z.ai` for Claude Code and `open.bigmodel.cn` for GLM-OCR. It is
+separate from the personal Coding Plan key used by the older probe. The
+service key is used for both GLM-5.3 and GLM-OCR.
 Do not commit or print them. The root route only reports Worker readiness;
-both probe routes require `Authorization: Bearer <token>` before starting the
-container. The key is passed to the Claude process as an environment variable
-for that invocation and is never placed in command arguments or a response.
+both legacy probe routes require `Authorization: Bearer <PROBE_TOKEN>` before
+starting the container. The model key is passed to the Claude process as an
+environment variable for that invocation and is never placed in command
+arguments or a response.
 
-This is an installation and fixed-inference test. The current RFQ desktop app
-invokes a local Claude executable and does not call this Worker.
+The current RFQ desktop app invokes a local Claude executable and does not yet
+call this Worker.
+
+## Service API
+
+All requests use HTTPS and JSON. An administrator provisions a separate client
+token for each installation. The service stores only its SHA-256 hash and can
+revoke that token. Never bundle `PROBE_TOKEN`, `GLM_API_KEY`, or
+`SERVICE_GLM_API_KEY` in an installer. Do not put one shared client token in
+every distributed copy; issue a distinct token during onboarding.
+
+`POST /v1/agent` accepts a `query`, an optional `session_id`, and up to two
+`images`. Images are recognized with GLM-OCR first, then the extracted text is
+passed to Claude Code for analysis. This is **OCR-based image handling**, not
+general visual understanding. The response contains `answer`, `session_id`,
+`model`, `image_handling`, `images`, and `quota_remaining`. Session history is
+scoped to the client token. The last five exchanges are reused for seven days;
+Claude Code itself runs a fresh, tool-free invocation for each turn.
+
+```http
+POST /v1/agent
+Authorization: Bearer <client-token>
+Content-Type: application/json
+
+{"session_id":"case-123","query":"请分析这条询盘缺少哪些规格","images":[{"mime_type":"image/png","data":"<base64>"}]}
+```
+
+`POST /v1/ocr` recognizes one PNG or JPEG image and returns `status`, `text`,
+`model`, `provider_request_id`, and `quota_remaining`.
+
+```http
+POST /v1/ocr
+Authorization: Bearer <client-token>
+Content-Type: application/json
+
+{"image":{"mime_type":"image/png","data":"<base64>"}}
+```
+
+Images must contain actual PNG or JPEG bytes, at most 3 MiB each. Base64 data
+URIs are also accepted. URLs are not accepted. The maximum JSON request body
+is 9 MiB. Client limits default to 20 agent calls and 100 OCR images per UTC
+day, with bursts capped at 3 agent calls and 10 OCR images per minute. Agent
+images count toward both limits. The whole service also stops at 100 agent
+calls and 500 OCR images per UTC day. A request exceeding a limit returns HTTP 429.
+Responses never include either upstream API key.
+
+An administrator calls `POST /v1/admin/clients` with
+`Authorization: Bearer <PROBE_TOKEN>` and JSON such as
+`{"name":"owner-test","daily_agent_limit":20,"daily_ocr_limit":100}`.
+The response returns the client token **once**. The administrator can revoke
+it with `DELETE /v1/admin/clients/<client_id>` using the same admin header.
+
+The server stores the session transcript in Cloudflare Durable Object storage.
+After seven days without activity it is no longer included in model context;
+this is not yet a data deletion policy. A client token can be revoked, but
+existing session transcripts are not automatically deleted.
+This API does not submit quotations or operate the Alibaba browser.
+
+From this directory, `npm run client:create -- owner-test` creates a private
+owner test token at `../../tmp/remote-client-token` (mode 0600). The admin
+token must already exist at `../../tmp/claude-probe-token`. Run
+`npm run test:service` for a two-turn agent check. Pass a PNG/JPEG path after
+`--` to also check both OCR and agent image handling, for example
+`npm run test:service -- ../../tmp/ocr-sample.png`. To issue another client
+token, provide a distinct name and output file to `client:create`.
+
+On 2026-09-29, the deployed service returned HTTP 401 without a client token.
+An authenticated two-turn Agent request reused its session ID and replied
+`REMOTE_AGENT_OK` on both turns. OCR recognized `RFQ OCR 456` from a synthetic
+PNG, and an Agent request with the same image replied `456` with
+`image_handling: glm-ocr-text`. A newly created token returned HTTP 401 after
+the administrator revoked it. These checks prove the remote API paths; they
+do not mean the desktop application has been integrated or tested with them.
+The legacy fixed prompt was also retested after the shared-container change
+and returned `GLM_REMOTE_OK`.
 
 On 2026-09-29, public `GET /` returned `worker-ready`, unauthenticated
 `GET /version` returned HTTP 401, and the authorized version check returned
@@ -53,5 +131,5 @@ request. It never prints the token. A cold container may take longer because
 Claude Code is installed again.
 
 Run `npm run test:remote -- --health-only` to check the public route without a
-token or a model call. The current endpoint does not accept custom prompts;
-sharing this URL does not yet give someone a general Claude Code agent.
+token or a model call. The legacy `/test-model` route accepts only its fixed
+prompt; `/v1/agent` accepts custom queries for provisioned clients.

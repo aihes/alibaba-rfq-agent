@@ -5,7 +5,10 @@
   "scripts": {
     "deploy": "wrangler deploy",
     "check": "wrangler deploy --dry-run",
-    "test:remote": "node test-remote.mjs"
+    "test": "node --test src/*.test.js",
+    "test:remote": "node test-remote.mjs",
+    "test:service": "node test-service.mjs",
+    "client:create": "node provision-client.mjs"
   },
   "dependencies": {
     "@cloudflare/containers": "0.3.7"
