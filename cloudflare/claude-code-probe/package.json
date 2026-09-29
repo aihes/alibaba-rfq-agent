@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
-    "check": "wrangler deploy --dry-run"
+    "check": "wrangler deploy --dry-run",
+    "test:remote": "node test-remote.mjs"
   },
   "dependencies": {
     "@cloudflare/containers": "0.3.7"

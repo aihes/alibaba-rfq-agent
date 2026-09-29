@@ -42,3 +42,16 @@ unauthorized `POST /test-model` returned 401 and the authorized fixed prompt
 returned `GLM_REMOTE_OK`. The model container was then read back as `inactive`.
 The public root route is only a health check; this probe is not yet a chat
 interface for classmates. Keep the probe token private.
+
+## Test the deployed Worker
+
+From this directory, run `npm run test:remote`. The script uses the local
+Git-ignored `../../tmp/claude-probe-token` file, or `PROBE_TOKEN` from the
+process environment. It checks the public health route, verifies that an
+unauthorized model request is rejected, and makes one real fixed-prompt GLM
+request. It never prints the token. A cold container may take longer because
+Claude Code is installed again.
+
+Run `npm run test:remote -- --health-only` to check the public route without a
+token or a model call. The current endpoint does not accept custom prompts;
+sharing this URL does not yet give someone a general Claude Code agent.
