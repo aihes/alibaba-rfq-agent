@@ -1,3 +1,15 @@
+/*
+  也可以在本目录用 curl 测试。模型请求只运行服务端固定的测试提示词：
+
+  curl -q -sS https://glm.knowflow.work/
+
+  printf 'Authorization: Bearer %s\n' "$(cat ../../tmp/claude-probe-token)" \
+    | curl -q -sS --fail-with-body --max-time 180 --header @- --request POST \
+        https://glm.knowflow.work/test-model
+
+  测试令牌通过标准输入传给 curl；不要分享令牌。
+*/
+
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
