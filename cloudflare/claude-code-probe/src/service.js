@@ -2,6 +2,7 @@ export const MAX_BODY_BYTES = 9 * 1024 * 1024;
 export const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 export const MAX_IMAGES = 2;
 export const AGENT_MODEL = "glm-5.3";
+export const AGENT_IMAGE_MODEL = "glm-5.3-flash";
 export const OCR_MODEL = "glm-ocr";
 export const OCR_URL = "https://open.bigmodel.cn/api/paas/v4/layout_parsing";
 export const ANTHROPIC_URL = "https://api.z.ai/api/anthropic";
@@ -87,8 +88,10 @@ export function parseImage(value) {
 }
 
 export function validateAgent(body) {
-  const query = typeof body.query === "string" ? body.query.trim() : "";
-  if (!query || query.length > 6000) throw new ApiError(400, "invalid_query");
+  const query = body.query;
+  if (typeof query !== "string" || !query.trim() || query.length > 6000) {
+    throw new ApiError(400, "invalid_query");
+  }
   const sessionId = body.session_id == null ? crypto.randomUUID() : body.session_id;
   if (typeof sessionId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(sessionId)) {
     throw new ApiError(400, "invalid_session_id");
@@ -102,14 +105,17 @@ export function validateOcr(body) {
   return { image: parseImage(body.image) };
 }
 
-export function buildAgentPrompt(history, query, imageTexts) {
-  const previous = history.map(({ role, text }) => `${role === "assistant" ? "Assistant" : "User"}:\n${text}`).join("\n\n");
-  const images = imageTexts.map((text, index) => `Image ${index + 1} OCR text:\n${text || "[No text recognized]"}`).join("\n\n");
-  return [
-    previous ? `<prior_conversation>\n${previous}\n</prior_conversation>` : "",
-    `<current_user_query>\n${query}\n</current_user_query>`,
-    images ? `<image_ocr_evidence>\n${images}\n</image_ocr_evidence>` : ""
-  ].filter(Boolean).join("\n\n");
+export function selectAgentModel(previousModel, images) {
+  return images.length || previousModel === AGENT_IMAGE_MODEL ? AGENT_IMAGE_MODEL : AGENT_MODEL;
+}
+
+export function buildClaudeInput(query, images) {
+  const content = [{ type: "text", text: query }, ...images.map((image) => ({
+    type: "image",
+    source: { type: "base64", media_type: image.mime_type, data: image.data }
+  }))];
+  return `${JSON.stringify({ type: "user", message: { role: "user", content },
+    parent_tool_use_id: null })}\n`;
 }
 
 export async function callGlmOcr(image, apiKey, request = fetch) {

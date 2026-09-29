@@ -54,8 +54,9 @@ try {
       images: [image]
     });
     console.log(`Agent with image: mode=${agent.image_handling}, answer=${agent.answer.slice(0, 300)}`);
-    if (agent.image_handling !== "glm-ocr-text" || !agent.answer) {
-      throw new Error("Agent did not analyze the OCR evidence.");
+    if (agent.image_handling !== "claude-code-direct" || agent.model !== "glm-5.3-flash" ||
+        agent.image_count !== 1 || !agent.answer) {
+      throw new Error("Claude Code did not receive the image directly.");
     }
   }
 } catch (error) {

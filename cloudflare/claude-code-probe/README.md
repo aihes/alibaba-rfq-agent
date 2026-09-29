@@ -11,15 +11,16 @@ npm package and runs a version check. `GET /version` returns that version.
 `POST /test-model` runs a fixed prompt through `GLM-5.3[1m]` using the same
 Anthropic-compatible endpoint configured locally. It disables Claude's tools
 and session persistence. The legacy probe and Agent API share one container
-instance because this deployment allows only one running instance. It sleeps
-after 45 seconds of inactivity. Each cold start installs the package again
-because the container filesystem is ephemeral.
+instance because this deployment allows only one running instance. The Worker
+stops the container after a completed Claude Code call; a 45-second idle sleep
+is a fallback. Each cold start installs the package again because the
+container filesystem is ephemeral.
 
 `PROBE_TOKEN`, `GLM_API_KEY`, and `SERVICE_GLM_API_KEY` must be configured as
 Cloudflare Worker secrets. `SERVICE_GLM_API_KEY` is a standard API key used
 with `api.z.ai` for Claude Code and `open.bigmodel.cn` for GLM-OCR. It is
 separate from the personal Coding Plan key used by the older probe. The
-service key is used for both GLM-5.3 and GLM-OCR.
+service key is used for GLM-5.3, GLM-5.3-Flash, and GLM-OCR.
 Do not commit or print them. The root route only reports Worker readiness;
 both legacy probe routes require `Authorization: Bearer <PROBE_TOKEN>` before
 starting the container. The model key is passed to the Claude process as an
@@ -31,19 +32,22 @@ call this Worker.
 
 ## Service API
 
-All requests use HTTPS and JSON. An administrator provisions a separate client
-token for each installation. The service stores only its SHA-256 hash and can
-revoke that token. Never bundle `PROBE_TOKEN`, `GLM_API_KEY`, or
-`SERVICE_GLM_API_KEY` in an installer. Do not put one shared client token in
-every distributed copy; issue a distinct token during onboarding.
+All requests use HTTPS and JSON. The service is currently for the owner's use:
+both APIs require a client token. The service stores only its SHA-256 hash and
+can revoke it. Never bundle `PROBE_TOKEN`, `GLM_API_KEY`, or
+`SERVICE_GLM_API_KEY` in an installer. If the desktop app is distributed later,
+issue a distinct client token for each installation.
 
 `POST /v1/agent` accepts a `query`, an optional `session_id`, and up to two
-`images`. Images are recognized with GLM-OCR first, then the extracted text is
-passed to Claude Code for analysis. This is **OCR-based image handling**, not
-general visual understanding. The response contains `answer`, `session_id`,
-`model`, `image_handling`, `images`, and `quota_remaining`. Session history is
-scoped to the client token. The last five exchanges are reused for seven days;
-Claude Code itself runs a fresh, tool-free invocation for each turn.
+`images`. The Worker forwards the query and original image blocks directly to
+Claude Code. It does not run OCR or assemble its own conversation history for
+this route. New text-only sessions use GLM-5.3; requests with images use
+GLM-5.3-Flash. Once a session has received an image, it stays on Flash so
+follow-up turns can use its visual context. The response contains `answer`,
+`session_id`, `model`, `image_handling`, `image_count`, and `quota_remaining`.
+Sessions are scoped to the client token. Claude Code's own `--session-id` and
+`--resume` handle continuity; the Worker saves its transcript in Durable Object
+storage so it can be restored after the container sleeps.
 
 ```http
 POST /v1/agent
@@ -68,7 +72,8 @@ Images must contain actual PNG or JPEG bytes, at most 3 MiB each. Base64 data
 URIs are also accepted. URLs are not accepted. The maximum JSON request body
 is 9 MiB. Client limits default to 20 agent calls and 100 OCR images per UTC
 day, with bursts capped at 3 agent calls and 10 OCR images per minute. Agent
-images count toward both limits. The whole service also stops at 100 agent
+images count only toward the Agent limit; `/v1/ocr` has its own OCR limit. The
+whole service also stops at 100 agent
 calls and 500 OCR images per UTC day. A request exceeding a limit returns HTTP 429.
 Responses never include either upstream API key.
 
@@ -78,10 +83,12 @@ An administrator calls `POST /v1/admin/clients` with
 The response returns the client token **once**. The administrator can revoke
 it with `DELETE /v1/admin/clients/<client_id>` using the same admin header.
 
-The server stores the session transcript in Cloudflare Durable Object storage.
-After seven days without activity it is no longer included in model context;
-this is not yet a data deletion policy. A client token can be revoked, but
-existing session transcripts are not automatically deleted.
+The server stores Claude Code's native session transcript in Cloudflare Durable
+Object storage, with a 32 MiB transcript limit per session. After seven days
+without activity, the next successful call starts a new session. This is not
+yet a timed data deletion policy: an inactive transcript is removed on that
+next successful call, and revoking a client token does not automatically
+delete its transcripts.
 This API does not submit quotations or operate the Alibaba browser.
 
 From this directory, `npm run client:create -- owner-test` creates a private
@@ -95,10 +102,14 @@ token, provide a distinct name and output file to `client:create`.
 On 2026-09-29, the deployed service returned HTTP 401 without a client token.
 An authenticated two-turn Agent request reused its session ID and replied
 `REMOTE_AGENT_OK` on both turns. OCR recognized `RFQ OCR 456` from a synthetic
-PNG, and an Agent request with the same image replied `456` with
-`image_handling: glm-ocr-text`. A newly created token returned HTTP 401 after
-the administrator revoked it. These checks prove the remote API paths; they
-do not mean the desktop application has been integrated or tested with them.
+PNG. After the direct-Claude change, a text session resumed and replied
+`TEST_OK`, and a direct image call replied `456` using `glm-5.3-flash` with
+`image_handling: claude-code-direct`. A text session switched to Flash when an
+image was added. The container then stopped, and another follow-up restored
+the native Claude Code transcript and replied `456`. A newly created token
+returned HTTP 401 after the administrator revoked it. These checks prove the
+remote API paths;
+they do not mean the desktop application has been integrated or tested with them.
 The legacy fixed prompt was also retested after the shared-container change
 and returned `GLM_REMOTE_OK`.
 

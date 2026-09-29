@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ApiError, buildAgentPrompt, callGlmOcr, parseImage, readJson, validateAgent } from "./service.js";
+import { ApiError, buildClaudeInput, callGlmOcr, parseImage, readJson,
+  selectAgentModel, validateAgent } from "./service.js";
 
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9C9S8AAAAASUVORK5CYII=";
 
@@ -16,7 +17,7 @@ test("image input accepts actual PNG bytes and rejects remote URLs or false MIME
 
 test("agent validates session ids and limits images", () => {
   const input = validateAgent({ query: "  summarize ", session_id: "case_123", images: [] });
-  assert.equal(input.query, "summarize");
+  assert.equal(input.query, "  summarize ");
   assert.equal(input.sessionId, "case_123");
   assert.throws(() => validateAgent({ query: "ok", session_id: "../other-client" }),
     (error) => error instanceof ApiError && error.code === "invalid_session_id");
@@ -47,10 +48,16 @@ test("OCR forwards only the image to the fixed provider and returns recognized t
   assert.equal(result.provider_request_id, "test-id");
 });
 
-test("session context includes the latest query and OCR evidence", () => {
-  const prompt = buildAgentPrompt([{ role: "user", text: "hello" },
-    { role: "assistant", text: "hi" }], "What is the price?", ["Quantity 12"]);
-  assert.match(prompt, /<prior_conversation>[\s\S]*hello[\s\S]*hi/);
-  assert.match(prompt, /<current_user_query>\nWhat is the price\?/);
-  assert.match(prompt, /Image 1 OCR text:\nQuantity 12/);
+test("Agent sends query and original image blocks to Claude Code", () => {
+  const input = JSON.parse(buildClaudeInput("What is in this image?", [
+    parseImage({ mime_type: "image/png", data: png })
+  ]));
+  assert.equal(input.type, "user");
+  assert.equal(input.message.content[0].text, "What is in this image?");
+  assert.equal(input.message.content[1].type, "image");
+  assert.equal(input.message.content[1].source.media_type, "image/png");
+  assert.equal(input.message.content[1].source.data, png);
+  assert.equal(selectAgentModel(null, []), "glm-5.3");
+  assert.equal(selectAgentModel(null, [{}]), "glm-5.3-flash");
+  assert.equal(selectAgentModel("glm-5.3-flash", []), "glm-5.3-flash");
 });
