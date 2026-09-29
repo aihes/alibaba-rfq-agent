@@ -98,7 +98,7 @@
             <p class="ops-help">优先使用本机 Claude 生成需求分析和报价话术；没有 Claude 时可使用 GLM 5.3 HTTP 接口。价格始终由报价规则计算，发送仍需逐单确认。</p>
             <form id="model-settings-form" class="model-settings-form">
               <fieldset class="settings-group wide" id="settings-model"><legend>01 / 模型服务</legend><label class="wide">模型配置来源<select id="model-config-source"><option value="auto">自动：优先本机 Claude；没有 Claude 时使用 GLM 环境变量</option><option value="environment">使用 GLM 环境变量 HTTP 请求</option><option value="manual">手动选择调用方式</option></select></label>
-              <p id="model-environment-status" class="ops-help wide" role="status"></p><div class="settings-actions wide"><button id="model-environment-refresh" type="button">重新读取本机环境变量</button></div>
+              <p id="model-environment-status" class="ops-help wide" role="status"></p><div class="settings-actions wide"><button id="claude-setup" type="button">安装并配置本机 Claude</button><button id="model-environment-refresh" type="button">重新读取本机环境变量</button><small>点击后会打开系统终端；脚本从 Anthropic 官网安装 Claude，并在终端中提示输入智谱 Key。完成后重新读取配置并测试连接。</small></div>
               <label>需求分析与话术服务<select id="model-provider"><option value="local-claude-sdk">本机 Claude（默认）</option><option value="openai-http">GLM / OpenAI 兼容 HTTP</option><option value="anthropic-http">GLM / Anthropic 兼容 HTTP</option></select></label>
               <label>模型名称<input id="model-name" required maxlength="200" placeholder="glm-5.3" /></label>
               <label class="wide">模型接口地址<input id="model-api-url" type="url" required spellcheck="false" /></label>

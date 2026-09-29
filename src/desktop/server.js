@@ -27,7 +27,7 @@ function contained(file, directory) {
  * 操作。所有证据文件由 catalog 白名单选取，客户端不能指定绝对路径。
  */
 export async function createCaseServer(options) {
-  const { resources, workspace, port = 0, desktopSettings, importData, importBrowserLogin, testLocalClaude, testOcr, notify, notifyToken, toolToken, embeddedBrowser, browserToken } = options;
+  const { resources, workspace, port = 0, desktopSettings, importData, importBrowserLogin, openClaudeSetup, testLocalClaude, testOcr, notify, notifyToken, toolToken, embeddedBrowser, browserToken } = options;
   const console = new OperatorConsole(options);
   const tools = createNotificationTools({ workspace, file: console.settingsFile,
     ...(notify ? { send: notify } : {}) });
@@ -152,6 +152,8 @@ export async function createCaseServer(options) {
           console.assertIdle(); result = desktopSettings.save(payload);
         } else if (route === "/api/desktop/settings/environment" && desktopSettings) {
           empty(); console.assertIdle(); result = await desktopSettings.refreshEnvironment();
+        } else if (route === "/api/desktop/claude/setup" && desktopSettings && openClaudeSetup) {
+          empty(); console.assertIdle(); result = await openClaudeSetup();
         } else if (route === "/api/desktop/model/test" && desktopSettings) {
           empty(); console.assertIdle();
           // 只有显式点击才实际调用模型。失败结果也记入本次进程的环境状态；

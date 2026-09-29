@@ -2,19 +2,21 @@
 
 ## 普通用户安装
 
-0.7.19 使用内置 Chromium，提供两种本地测试安装包：
+0.7.20 使用内置 Chromium，提供两种本地测试安装包：
 
-- Apple Silicon macOS：`dist/desktop/RFQ-Assistant-0.7.19-mac-arm64.dmg`。
-- Windows x64：`dist/desktop/RFQ-Assistant-0.7.19-win-x64.exe`。
+- Apple Silicon macOS：`dist/desktop/RFQ-Assistant-0.7.20-mac-arm64.dmg`。
+- Windows x64：`dist/desktop/RFQ-Assistant-0.7.20-win-x64.exe`。
 
 Windows 双击 EXE 安装，无需管理员权限；会创建桌面与开始菜单快捷方式。
 本次在 Mac 交叉生成 Windows 安装包，已检查发布资源与 x64 图片处理
 模块，但未在 Windows 实机验证安装、浏览器控制、通知和退出行为。
 
 1. 打开 DMG，把「RFQ助手」拖入 Applications，再打开应用。
-2. 在左侧「设置」查看模型配置来源。默认使用已安装的本机 Claude CLI，
-   模型为 GLM 5.3；点击「测试模型连接」验证。没有 Claude CLI 时，
-   可选 GLM HTTP 请求，复用本机环境变量或手动填写 Key 和接口。
+2. 在左侧「设置」查看模型配置来源。默认使用本机 Claude CLI，
+   模型为 GLM 5.3。未安装时点击「安装并配置本机 Claude」，按系统终端提示
+   安装并输入自己的智谱国内或 Z.AI Key；完成后点击「重新读取本机环境变量」
+   和「测试模型连接」。没有 Claude CLI 时也可选 GLM HTTP 请求，
+   复用本机环境变量或手动填写 Key 和接口。
    HTTP 模式支持 OpenAI / Anthropic 兼容接口及 Anthropic 官方 API。
 3. GLM OCR 默认复用智普模型 Key；需要单独计费账号时再填写 OCR Key。复用时
    仅请求 Key 所属的智普 OCR 平台，不复用第三方模型 Key。也可选择「关闭图片识别」。
@@ -36,6 +38,30 @@ Windows 双击 EXE 安装，无需管理员权限；会创建桌面与开始菜�
 仅从已有 Chrome 迁移登录时，可使用随项目提供的导出扩展。
 
 ## 本机 Claude 与 HTTP 模型配置
+
+### 安装与配置本机 Claude
+
+在桌面版「设置 → 模型服务」点击「安装并配置本机 Claude」。应用会打开
+随安装包提供的 macOS/Windows 脚本；用户确认后，脚本从 Anthropic 官方
+`claude.ai` 下载原生 Claude Code 安装程序（已经安装时跳过），然后让用户
+选择智谱国内或 Z.AI 并在终端中隐式输入自己的 API Key。无需另装
+Node.js、npm 或 Git；需要联网和对应平台的 Key。脚本仅在用户主动点击后运行。
+
+配置会合并到用户的 `~/.claude/settings.json`，保留其他 Claude 设置，
+替换原有的 Anthropic API Key、认证与接口，避免旧 Key 抢占新 Key；原文件会备份为同目录下的
+`settings.json.before-rfq-*.bak`。Key 不进入命令行参数、仓库或安装包，
+但按 Claude/智谱的配置方式，它会以**明文**保存在该设置文件及备份中
+（macOS 权限为 0600；Windows 依赖用户目录的访问权限）。已有其他 Claude 服务配置的用户应先了解这一变化；
+希望避免修改 Claude 全局设置时，可以改选本应用的 HTTP 模式，在应用中
+加密保存模型 Key。脚本不会替用户创建账号或购买用量。
+
+macOS 使用 `scripts/setup-local-claude-macos.command`，Windows 使用
+`scripts/setup-local-claude-windows.cmd` 启动 PowerShell 脚本；Key 交给
+`scripts/configure-local-claude.cjs` 合并配置。Windows 脚本还需在真实
+Windows 机器上验证安装流程。安装后点击「重新读取本机环境变量」和
+「测试模型连接」；CLI 存在只代表找到了程序，不代表 Key 已可用。
+官方安装方式：[Anthropic Claude Code 安装说明](https://code.claude.com/docs/en/setup)；
+Z.AI 配置方式：[Z.AI Claude Code 指南](https://docs.z.ai/devpack/tool/claude)。
 
 「自动」优先使用已安装的本机 Claude；若未安装且有 GLM 环境变量，使用 HTTP 请求。
 「使用 GLM 环境变量 HTTP 请求」强制使用本机 HTTP 配置；「手动选择调用方式」

@@ -86,6 +86,14 @@ async function loadDesktop() {
     $('#notification-platform').textContent = '系统通知 + 应用内提醒';
     renderModelSettings(desktopInfo.settings);
     $('#model-config-source').addEventListener('change', syncModelSource);
+    $('#claude-setup').addEventListener('click', async () => {
+      $('#claude-setup').disabled = true;
+      try {
+        await opsRequest('/api/desktop/claude/setup', {});
+        $('#model-environment-status').textContent = '安装脚本已在系统终端打开。完成后点击「重新读取本机环境变量」，再测试模型连接。';
+      } catch (error) { $('#model-environment-status').textContent = error.message; }
+      finally { $('#claude-setup').disabled = false; }
+    });
     $('#model-environment-refresh').addEventListener('click', async () => {
       $('#model-environment-refresh').disabled = true;
       $('#model-environment-status').textContent = '正在读取本机模型环境变量…';

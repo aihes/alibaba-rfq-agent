@@ -119,6 +119,14 @@ else {
     await builder.runJson("scripts/build_case_catalog.mjs", [], 120000);
     service = await createCaseServer({ resources, workspace, desktop: true, desktopSettings: settings,
       environment, importData, importBrowserLogin, notify: notifier.send, notifyToken: token, toolToken, embeddedBrowser, browserToken,
+      openClaudeSetup: async () => {
+        const name = process.platform === "darwin" ? "setup-local-claude-macos.command" : "setup-local-claude-windows.cmd";
+        const file = path.join(resources, "scripts", name);
+        if (!fs.existsSync(file)) throw new Error("安装脚本未随应用提供");
+        const error = await shell.openPath(file);
+        if (error) throw new Error(`安装脚本未能打开：${error}`);
+        return { opened: true };
+      },
       revokeBrowser: () => embeddedBrowser.invalidate() });
     // 全新安装还没有运行记录/设置，ops 目录未必存在。连接文件必须在
     // 创建父目录后写入，不能依赖导入过 CASE 或曾经开过任务的开发目录。

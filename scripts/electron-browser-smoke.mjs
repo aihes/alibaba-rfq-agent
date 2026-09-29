@@ -62,8 +62,10 @@ app.whenReady().then(async () => {
       localEnvironment: { variables: { GLM_API_KEY: "synthetic-ui-key", GLM_MODEL: "glm-fixture" }, source: "测试本机环境变量" },
       reloadEnvironment: async () => ({ variables: { GLM_API_KEY: "synthetic-ui-key", GLM_MODEL: "glm-fixture" }, source: "测试本机环境变量" })
     });
+    let setupOpened = 0;
     service = await createCaseServer({ resources, workspace: root, desktop: true, embeddedBrowser: b, browserToken: token,
       desktopSettings: settings, importBrowserLogin: async () => ({ canceled: true }),
+      openClaudeSetup: async () => { setupOpened++; return { opened: true }; },
       notify: async () => ({ status: "accepted", detail: "fixture system accepted; banner unverified" }),
       environment: () => ({ ...settings.environment(), RFQ_BROWSER_URL: `${service.url}api/desktop/browser/command`, RFQ_BROWSER_TOKEN: token }), revokeBrowser: () => b.invalidate() });
     const config = { electronBrowserUrl: `${service.url}api/desktop/browser/command`, electronBrowserToken: token, allowLiveSubmit: true, quotePort: "Shanghai" };
@@ -206,12 +208,24 @@ app.whenReady().then(async () => {
     await ui.loadURL(`${service.url}?view=console`);
     const until = async (expression) => {
       for (let i = 0; i < 100; i++) {
-        if (await ui.webContents.executeJavaScript(expression)) return;
+        try { if (await ui.webContents.executeJavaScript(expression)) return; }
+        catch (error) { throw new Error(`Workbench expression failed: ${expression}: ${error.message}`); }
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
       throw new Error(`Workbench notification UI did not reach: ${expression}`);
     };
     await until("document.querySelector('#ops-term').options.length > 0");
+    await ui.webContents.executeJavaScript("document.querySelector('.workspace-nav [data-view=settings]').click()");
+    await until("!document.querySelector('#settings-workspace').hidden && !document.querySelector('#claude-setup').disabled");
+    if (process.argv.includes("--screenshot")) {
+      await ui.webContents.executeJavaScript("document.querySelector('#claude-setup').scrollIntoView({ block: 'center' })");
+      await new Promise(resolve => setTimeout(resolve, 300));
+      fs.writeFileSync(path.join(os.tmpdir(), "rfq-claude-setup-smoke.png"), (await ui.capturePage()).toPNG());
+    }
+    await ui.webContents.executeJavaScript("document.querySelector('#claude-setup').click()");
+    await until("document.querySelector('#model-environment-status').textContent.includes('安装脚本已在系统终端打开')");
+    assert.equal(setupOpened, 1);
+    await ui.webContents.executeJavaScript("document.querySelector('.workspace-nav [data-view=console]').click()");
     await until("document.querySelector('#run-progress-stage').textContent.includes('上次停在：读取 RFQ 详情')");
     await until("document.querySelectorAll('#run-history li').length === 4");
     const stageText = await ui.webContents.executeJavaScript("document.querySelector('#run-history').textContent");
@@ -219,45 +233,44 @@ app.whenReady().then(async () => {
     assert.match(stageText, /正在搜索 fixture/);
     await ui.webContents.executeJavaScript("document.querySelector('[data-stage-index=\"1\"]').open = true");
     await until("document.querySelector('[data-stage-index=\"1\"] .stage-evidence').textContent.includes('Fixture amount')");
-    await until("document.querySelector('#priced-quote-list').textContent.includes('Fixture amount')");
-    assert.match(await ui.webContents.executeJavaScript("document.querySelector('#priced-quote-list').textContent"), /\$375/);
-    assert.doesNotMatch(await ui.webContents.executeJavaScript("document.querySelector('#quote-list').textContent"), /Fixture conditional amount|Fixture needs review/);
-    assert.doesNotMatch(await ui.webContents.executeJavaScript("document.querySelector('#priced-quote-list').textContent"), /Fixture conditional amount|Fixture needs review/);
-    assert.match(await ui.webContents.executeJavaScript("document.querySelector('.quote-status-help').textContent"), /需要人工复核 \/ 条件报价/);
-    assert.match(await ui.webContents.executeJavaScript("document.querySelector('#quote-list').textContent"), /生成于 2026/);
+    await until("document.querySelector('#quote-list').textContent.includes('Fixture amount')");
+    assert.match(await ui.webContents.executeJavaScript("document.querySelector('#quote-list').textContent"), /\$375/);
+    assert.match(await ui.webContents.executeJavaScript("document.querySelector('#quote-list').textContent"), /Fixture conditional amount|Fixture needs review/);
+    assert.match(await ui.webContents.executeJavaScript("document.querySelector('.quote-status-help').textContent"), /有金额，条件待确认/);
+    assert.match(await ui.webContents.executeJavaScript("document.querySelector('#quote-list').textContent"), /分析于 2026/);
+    await ui.webContents.executeJavaScript("document.querySelector('#quote-list [data-draft=rfq-ui-draft]').click()");
     await until("document.querySelector('#quote-detail').textContent.includes('Buyer needs 500 B flute cartons for export')");
     assert.match(await ui.webContents.executeJavaScript("document.querySelector('#quote-detail').textContent"), /Buyer needs 500 B flute cartons for export/);
     assert.equal(await ui.webContents.executeJavaScript("document.querySelector('.quote-source-actions a')?.href"), "https://sourcing.alibaba.com/rfq_detail.htm?fixture=1");
     await until("!document.querySelector('#console-workspace').hidden");
     await ui.webContents.executeJavaScript("document.querySelector('[data-quote-image]').scrollIntoView({ block: 'center' })");
-    await until("document.querySelector('[data-quote-image] img')?.naturalWidth > 0");
     await ui.webContents.executeJavaScript("document.querySelector('[data-quote-image]').click()");
     assert.equal(await ui.webContents.executeJavaScript("document.querySelector('.quote-image-dialog').open"), true);
+    await until("document.querySelector('.quote-image-dialog img')?.naturalWidth > 0");
     await ui.webContents.executeJavaScript("document.querySelector('.quote-image-close').click()");
     assert.equal(await ui.webContents.executeJavaScript("document.querySelector('.quote-image-dialog').open"), false);
-    assert.match(await ui.webContents.executeJavaScript("document.querySelector('#submitted-quote-list').textContent"), /没有已验证提交/);
     await ui.webContents.executeJavaScript("document.querySelector('#quote-search').value = 'B flute'; document.querySelector('#quote-search').dispatchEvent(new Event('input', { bubbles: true }))");
-    await until("document.querySelector('#quote-filter-count').textContent.includes('1 / 1')");
+    await until("document.querySelector('#quote-filter-count').textContent.includes('1 / 3')");
     await ui.webContents.executeJavaScript("document.querySelector('#quote-status-filter').value = 'submitted'; document.querySelector('#quote-status-filter').dispatchEvent(new Event('change', { bubbles: true }))");
-    await until("document.querySelector('#quote-filter-count').textContent.includes('0 / 1')");
-    assert.equal(await ui.webContents.executeJavaScript("document.querySelector('#quote-workbench-grid').classList.contains('is-empty') && document.querySelector('#priced-quotes-section').hidden"), true);
+    await until("document.querySelector('#quote-filter-count').textContent.includes('0 / 3')");
+    assert.equal(await ui.webContents.executeJavaScript("document.querySelector('#quote-workbench-grid').classList.contains('is-empty')"), true);
     await ui.webContents.executeJavaScript("document.querySelector('#quote-status-filter').value = 'all'; document.querySelector('#quote-status-filter').dispatchEvent(new Event('change', { bubbles: true }))");
-    await until("document.querySelector('#quote-filter-count').textContent.includes('1 / 1')");
+    await until("document.querySelector('#quote-filter-count').textContent.includes('1 / 3')");
     await until("document.querySelector('#quote-detail [data-quote-archive=prompt]')?.disabled === false");
     await ui.webContents.executeJavaScript("document.querySelector('#quote-detail [data-quote-archive=prompt]').click()");
     await ui.webContents.executeJavaScript("document.querySelector('#quote-detail [data-quote-archive=confirm]').click()");
-    await until("document.querySelector('#quote-show-archived').textContent.includes('（1）')");
+    await until("document.querySelector('#quote-filter-count').textContent.includes('0 / 2')");
     assert.ok(fs.existsSync(draftFile));
-    await ui.webContents.executeJavaScript("document.querySelector('#quote-show-archived').click()");
+    await ui.webContents.executeJavaScript("document.querySelector('#quote-status-filter').value = 'archived'; document.querySelector('#quote-status-filter').dispatchEvent(new Event('change', { bubbles: true }))");
     await until("document.querySelector('#quote-detail [data-quote-archive=restore]')?.disabled === false");
     await ui.webContents.executeJavaScript("document.querySelector('#quote-detail [data-quote-archive=restore]').click()");
-    await until("document.querySelector('#quote-show-archived').textContent.includes('（0）')");
+    await until("document.querySelector('#quote-filter-count').textContent.includes('1 / 3')");
     assert.ok(fs.existsSync(draftFile));
     if (process.argv.includes("--screenshot")) {
       await ui.webContents.executeJavaScript("window.scrollTo({ top: document.querySelector('#run-history').getBoundingClientRect().top + window.scrollY - 120, behavior: 'instant' })");
       await new Promise(resolve => setTimeout(resolve, 300));
       fs.writeFileSync(path.join(os.tmpdir(), "rfq-stage-ui-smoke.png"), (await ui.capturePage()).toPNG());
-      await ui.webContents.executeJavaScript("window.scrollTo({ top: document.querySelector('#priced-quotes-title').getBoundingClientRect().top + window.scrollY - 100, behavior: 'instant' })");
+      await ui.webContents.executeJavaScript("window.scrollTo({ top: document.querySelector('#drafts-title').getBoundingClientRect().top + window.scrollY - 100, behavior: 'instant' })");
       await new Promise(resolve => setTimeout(resolve, 300));
       fs.writeFileSync(path.join(os.tmpdir(), "rfq-quote-ui-smoke.png"), (await ui.capturePage()).toPNG());
       ui.setSize(390, 844);

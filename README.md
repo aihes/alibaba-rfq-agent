@@ -18,7 +18,9 @@
 
 ## 普通用户：桌面应用
 
-Mac 打开 `dist/desktop/RFQ-Assistant-0.7.19-mac-arm64.dmg`；Windows 双击 `dist/desktop/RFQ-Assistant-0.7.19-win-x64.exe`，安装「RFQ助手」。左侧「设置」默认使用本机 Claude 和 GLM 5.3；没有 Claude 时可选 HTTP 模式并复用本机 GLM 环境变量。GLM OCR 默认共用已保存或本机环境变量中的智普 Key，也可单独填写 OCR Key。在「报价 Agent」的运行准备区可分别点击「测试模型」「测试 OCR」实际调用服务；未测试的配置只显示“已配置 · 待检测”，测试会产生少量用量。RFQ 扫描按钮置灰时，悬停或聚焦按钮可查看原因与处理办法。在「报价 Agent」打开浏览器手动登录，也可在「浏览器」使用随包导出工具迁移 Chrome 的 Alibaba 登录。账号状态自动更新；桌面版浏览器操作默认可用，登录后直接启动扫描，报价仍需逐单确认。正常使用无需安装 Chrome、插件、Node、Python 或终端；本机 Claude 模式需要用户已安装并配置 Claude CLI。
+Mac 打开 `dist/desktop/RFQ-Assistant-0.7.20-mac-arm64.dmg`；Windows 双击 `dist/desktop/RFQ-Assistant-0.7.20-win-x64.exe`，安装「RFQ助手」。左侧「设置」默认使用本机 Claude 和 GLM 5.3；没有 Claude 时可以点击「安装并配置本机 Claude」，也可选 HTTP 模式并复用本机 GLM 环境变量。GLM OCR 默认共用已保存或本机环境变量中的智普 Key，也可单独填写 OCR Key。在「报价 Agent」的运行准备区可分别点击「测试模型」「测试 OCR」实际调用服务；未测试的配置只显示“已配置 · 待检测”，测试会产生少量用量。RFQ 扫描按钮置灰时，悬停或聚焦按钮可查看原因与处理办法。在「报价 Agent」打开浏览器手动登录，也可在「浏览器」使用随包导出工具迁移 Chrome 的 Alibaba 登录。账号状态自动更新；桌面版浏览器操作默认可用，登录后直接启动扫描，报价仍需逐单确认。正常使用无需安装 Chrome、插件、Node 或 Python；本机 Claude 模式需要用户已安装并配置 Claude CLI，也可由随包脚本完成。
+
+设置页现提供「安装并配置本机 Claude」入口：用户确认后运行官方安装程序，并在系统终端选择智谱平台、输入自己的 Key。脚本保留并备份其他 Claude 设置；Key 会以明文保存在 Claude 用户设置中（macOS 文件权限为 0600，Windows 由用户目录访问权限保护）。安装完需重新读取环境并测试模型连接。希望避免修改 Claude 全局设置时可使用应用内加密保存 Key 的 HTTP 模式。
 
 关闭窗口继续后台运行；菜单「退出并停止任务」才退出。已有真实 CASE 可通过「导入已有数据」选择原项目 `data` 迁移，私人数据不会打进安装包。当前为本地测试版，对外分发前需完成正式签名与公证。详细步骤见 [桌面版说明](docs/DESKTOP.md)。
 

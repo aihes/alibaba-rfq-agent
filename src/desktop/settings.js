@@ -40,7 +40,7 @@ export class DesktopSettings {
     let local = null, error = this.localEnvironment.error || null;
     try { local = resolveEnvironmentModel(this.localEnvironment.variables); }
     catch { error = "本机模型地址格式无效，请检查环境变量或改用手动配置"; }
-    const claudeExecutable = this.detectClaude(this.localEnvironment.variables);
+    const claudeExecutable = this.detectClaude({ ...this.localEnvironment.claudeVariables, ...this.localEnvironment.variables });
     const useLocal = this.value.modelConfigSource === "environment" || (this.value.modelConfigSource === "auto" && !this.value.modelApiKey && local
       && (this.value.agentProvider !== "local-claude-sdk" || !claudeExecutable));
     return { value: useLocal ? { ...this.value, agentProvider: local?.agentProvider || defaults.agentProvider, modelName: local?.modelName || defaults.modelName,
@@ -129,13 +129,14 @@ export class DesktopSettings {
   environment() {
     const resolved = this.resolved(), v = resolved.value, e = pickModelEnvironment(this.localEnvironment.variables),
       c = pickModelEnvironment(this.localEnvironment.claudeVariables || {}), localClaude = v.agentProvider === "local-claude-sdk",
+      claudeAuth = (c.ANTHROPIC_AUTH_TOKEN || c.ANTHROPIC_API_KEY) && c.ANTHROPIC_BASE_URL ? c : e,
       ocr = this.ocrConfiguration(resolved);
     return { AGENT_PROVIDER: v.agentProvider, MODEL_NAME: v.modelName, MODEL_API_URL: v.modelApiUrl,
       RFQ_MODEL_CONFIG_SOURCE: resolved.source === "environment" ? this.localEnvironment.source : localClaude ? "本机 Claude" : "已保存配置",
       MODEL_API_KEY: localClaude ? "" : v.modelApiKey || "",
-      ...(localClaude ? { ...((e.ANTHROPIC_API_KEY || c.ANTHROPIC_API_KEY) ? { ANTHROPIC_API_KEY: e.ANTHROPIC_API_KEY || c.ANTHROPIC_API_KEY } : {}),
-        ...((e.ANTHROPIC_AUTH_TOKEN || c.ANTHROPIC_AUTH_TOKEN) ? { ANTHROPIC_AUTH_TOKEN: e.ANTHROPIC_AUTH_TOKEN || c.ANTHROPIC_AUTH_TOKEN } : {}),
-        ...((e.ANTHROPIC_BASE_URL || c.ANTHROPIC_BASE_URL) ? { ANTHROPIC_BASE_URL: e.ANTHROPIC_BASE_URL || c.ANTHROPIC_BASE_URL } : {}) }
+      ...(localClaude ? { ...((!claudeAuth.ANTHROPIC_AUTH_TOKEN && claudeAuth.ANTHROPIC_API_KEY) ? { ANTHROPIC_API_KEY: claudeAuth.ANTHROPIC_API_KEY } : {}),
+        ...((claudeAuth.ANTHROPIC_AUTH_TOKEN) ? { ANTHROPIC_AUTH_TOKEN: claudeAuth.ANTHROPIC_AUTH_TOKEN } : {}),
+        ...((claudeAuth.ANTHROPIC_BASE_URL) ? { ANTHROPIC_BASE_URL: claudeAuth.ANTHROPIC_BASE_URL } : {}) }
         : { ANTHROPIC_API_KEY: v.modelApiKey || "", ANTHROPIC_HTTP_MODEL: v.modelName, ANTHROPIC_API_URL: v.modelApiUrl }),
       LOCAL_CLAUDE_EXECUTABLE: localClaude ? resolved.claudeExecutable : "",
       // 界面中显示的模型名就是 SDK 实际请求的模型。用户级 Claude

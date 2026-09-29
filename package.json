@@ -1,6 +1,6 @@
 {
   "name": "alibaba-rfq-agent",
-  "version": "0.7.19",
+  "version": "0.7.20",
   "private": true,
   "type": "module",
   "description": "Alibaba RFQ desktop assistant with an isolated embedded Chromium browser, guarded pricing and quote review.",
