@@ -18,6 +18,8 @@
 
 ## 普通用户：桌面应用
 
+首次安装和操作请看 [快速使用手册](docs/用户使用手册.md)。
+
 Mac 打开 `dist/desktop/RFQ-Assistant-0.7.21-mac-arm64.dmg`；Windows 双击 `dist/desktop/RFQ-Assistant-0.7.21-win-x64.exe`，安装「RFQ助手」。左侧「设置」默认选择云端 Claude Code 和云端 OCR；填入单独签发的服务授权令牌并保存后，分别点击「测试模型」「测试 OCR」。令牌保存在本机系统加密设置里，不随安装包分发。也可手动选择本机 Claude 或 GLM HTTP。RFQ 扫描按钮置灰时，悬停或聚焦按钮可查看原因与处理办法。在「报价 Agent」打开浏览器手动登录，也可在「浏览器」使用随包导出工具迁移 Chrome 的 Alibaba 登录。账号状态自动更新；桌面版浏览器操作默认可用，登录后直接启动扫描，报价仍需逐单确认。正常使用无需安装 Chrome、Claude、插件、Node 或 Python。
 
 设置页现提供「安装并配置本机 Claude」入口：用户确认后运行官方安装程序，并在系统终端选择智谱平台、输入自己的 Key。脚本保留并备份其他 Claude 设置；Key 会以明文保存在 Claude 用户设置中（macOS 文件权限为 0600，Windows 由用户目录访问权限保护）。安装完需重新读取环境并测试模型连接。希望避免修改 Claude 全局设置时可使用应用内加密保存 Key 的 HTTP 模式。
