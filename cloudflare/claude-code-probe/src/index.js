@@ -3,16 +3,19 @@ import { adminHtml, adminCss, adminJs } from "./admin-page.js";
 import { Container, getContainer } from "@cloudflare/containers";
 export { ContainerProxy } from "@cloudflare/containers";
 import quoteSkill from "../../../src/skills/rfq-quote-advisor/SKILL.md";
+import agentSdkRunner from "./agent-sdk-runner.txt";
+import sdkProbeRunner from "./sdk-probe-runner.txt";
 import { AGENT_WORKSPACE, CLAUDE_CONFIG_DIR, SKILL_FILE, SKILL_NAME,
-  PROBE_MODEL_URL, PROXY_AUTH_TOKEN, RUN_TIMEOUT_MS, SERVICE_MODEL_URL,
-  agentCliArgs, agentPrompt, dropToNode, parseClaudeOutput, runAsNodeScript,
+  PROBE_MODEL_URL, PROXY_AUTH_TOKEN, RUN_TIMEOUT_MS, SERVICE_MODEL_URL, TOOL_BOUNDARY,
+  agentPrompt, dropToNode, runAsNodeScript,
   modelRequestAllowed, writeSkillScript } from "./agent-runtime.js";
 import {
-  ApiError, buildClaudeInput, callGlmOcr, readJson,
+  ApiError, callGlmOcr, readJson,
   selectAgentModel, validateAgent, validateOcr
 } from "./service.js";
 
 const packageName = "@anthropic-ai/claude-code@2.1.284";
+const sdkPackageName = "@anthropic-ai/claude-agent-sdk@0.3.285";
 const decoder = new TextDecoder();
 const SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 const SESSION_CHUNK_BYTES = 1024 * 1024;
@@ -127,6 +130,14 @@ export class ClaudeCodeProbe extends Container {
     return decoder.decode(result.stdout).trim();
   }
 
+  async ensureSdk() {
+    if (!this.ctx.container.running) await this.start();
+    const install = await this.ctx.container.exec(
+      ["npm", "install", "--prefix", "/tmp/rfq-agent-sdk", "--no-audit", "--no-fund",
+        "--no-save", sdkPackageName], { stdout: "ignore" });
+    if ((await install.output()).exitCode !== 0) throw new Error("sdk_install_failed");
+  }
+
   async cliVersion() {
     return this.exclusive(() => this.ensureClaude());
   }
@@ -165,9 +176,9 @@ export class ClaudeCodeProbe extends Container {
     return new Uint8Array(output.stdout);
   }
 
-  async runClaude(query, images, model, nativeId, previousTranscript, skill) {
-    this.agentStage = "ensure_claude";
-    await this.ensureClaude();
+  async runAgentSdk(query, images, model, nativeId, previousTranscript, skill) {
+    this.agentStage = "ensure_sdk";
+    await this.ensureSdk();
     this.agentStage = "prepare_workspace";
     if (skill === SKILL_NAME) await this.installSkill();
     else {
@@ -178,7 +189,10 @@ export class ClaudeCodeProbe extends Container {
     }
     this.agentStage = "restore_transcript";
     if (previousTranscript) await this.restoreTranscript(nativeId, previousTranscript);
-    const input = new TextEncoder().encode(buildClaudeInput(agentPrompt(query, skill), images));
+    const input = new TextEncoder().encode(JSON.stringify({
+      prompt: agentPrompt(query, skill), images, model, nativeId, cwd: AGENT_WORKSPACE,
+      resume: Boolean(previousTranscript), skill, toolBoundary: TOOL_BOUNDARY
+    }));
     const stdin = new ReadableStream({
       start(controller) {
         controller.enqueue(input);
@@ -192,8 +206,7 @@ export class ClaudeCodeProbe extends Container {
     try {
       this.agentStage = "start_agent";
       const process = await this.ctx.container.exec(
-        ["node", "-e", runAsNodeScript,
-          ...agentCliArgs({ nativeId, model, resume: Boolean(previousTranscript), skill })],
+        ["node", "-e", runAsNodeScript, "node", "--input-type=module", "-e", agentSdkRunner],
         {
           cwd: AGENT_WORKSPACE,
           stdin,
@@ -219,21 +232,22 @@ export class ClaudeCodeProbe extends Container {
         last_denial: this.activeRun?.lastDenial ?? null };
       this.activeRun = null;
     }
-    const { result, toolsUsed } = parseClaudeOutput(decoder.decode(output.stdout));
-    if (output.exitCode !== 0 || !result || result.is_error || typeof result.result !== "string") {
+    let result;
+    try { result = JSON.parse(decoder.decode(output.stdout).trim().split("\n").at(-1)); }
+    catch { result = null; }
+    if (output.exitCode !== 0 || result?.error || typeof result?.answer !== "string") {
       this.lastAgentDiagnostic = {
-        exit_code: output.exitCode, result_type: result?.type ?? null,
-        result_subtype: result?.subtype ?? null, is_error: result?.is_error ?? null,
+        exit_code: output.exitCode, sdk_error: result?.error ?? null,
         proxy: proxyStats,
         stderr: decoder.decode(output.stderr).trim().slice(-1200)
           .replaceAll(PROXY_AUTH_TOKEN, "[placeholder]")
       };
-      throw new Error("claude_upstream_error");
+      throw new Error("sdk_upstream_error");
     }
     this.lastAgentDiagnostic = null;
     if (result.session_id !== nativeId) throw new Error("claude_session_mismatch");
     this.agentStage = "read_transcript";
-    return { answer: result.result.trim().slice(0, 12_000), toolsUsed,
+    return { answer: result.answer.trim().slice(0, 12_000), toolsUsed: result.tools_used,
       transcript: await this.readTranscript(nativeId) };
   }
 
@@ -275,6 +289,51 @@ export class ClaudeCodeProbe extends Container {
           detail: detail.replaceAll(PROXY_AUTH_TOKEN, "[placeholder]") };
       }
       return { ok: true, model: "GLM-5.3[1m]", result: response.result.trim() };
+    });
+  }
+
+  async sdkProbe() {
+    return this.exclusive(async () => {
+      // Keep the experiment away from any previous client's filesystem.
+      if (this.ctx.container.running) await this.destroy();
+      await this.start();
+      await this.installSkill();
+      await this.ensureSdk();
+      this.activeRun = { provider: "service", model: "glm-5.3", calls: 0,
+        expiresAt: Date.now() + RUN_TIMEOUT_MS };
+      let output;
+      let proxy;
+      try {
+        const process = await this.ctx.container.exec(
+          ["node", "-e", runAsNodeScript, "node", "--input-type=module", "-e", sdkProbeRunner],
+          { cwd: AGENT_WORKSPACE, env: {
+            HOME: "/home/node", ANTHROPIC_AUTH_TOKEN: PROXY_AUTH_TOKEN,
+            ANTHROPIC_BASE_URL: SERVICE_MODEL_URL, ANTHROPIC_MODEL: "glm-5.3",
+            CLAUDE_CONFIG_DIR: "/tmp/rfq-sdk-config",
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+          } });
+        const timer = setTimeout(() => process.kill(), RUN_TIMEOUT_MS);
+        try { output = await process.output(); } finally { clearTimeout(timer); }
+      } finally {
+        proxy = { calls: this.activeRun?.calls ?? 0,
+          last_denial: this.activeRun?.lastDenial ?? null };
+        this.activeRun = null;
+      }
+      let result;
+      try { result = JSON.parse(decoder.decode(output.stdout).trim().split("\n").at(-1)); }
+      catch { result = null; }
+      return {
+        ok: output.exitCode === 0 && result?.skill_loaded === true &&
+          result?.tools_used?.includes("Bash") &&
+          result?.answer?.includes("SDK_PROBE_OK"),
+        sdk: sdkPackageName, exit_code: output.exitCode,
+        skill_loaded: result?.skill_loaded ?? false,
+        tools_used: result?.tools_used ?? [],
+        answer: result?.answer?.slice(0, 1000) ?? null,
+        error: result?.error ?? decoder.decode(output.stderr).trim().slice(-1000)
+          .replaceAll(PROXY_AUTH_TOKEN, "[placeholder]"),
+        proxy
+      };
     });
   }
 
@@ -430,7 +489,7 @@ export class ClaudeCodeProbe extends Container {
       const transcript = resumable ? await this.loadSessionTranscript(prior) : null;
       const model = selectAgentModel(resumable ? prior.model : null, images);
       this.lastAgentDiagnostic = null;
-      const result = await this.runClaude(query, images, model, nativeId, transcript, skill);
+      const result = await this.runAgentSdk(query, images, model, nativeId, transcript, skill);
       await this.saveSessionTranscript(key, prior, nativeId, model, skill, result.transcript);
       await this.ctx.storage.delete("agent-diagnostic");
       return { ok: true, session_id: sessionId, answer: result.answer, model,
@@ -445,7 +504,7 @@ export class ClaudeCodeProbe extends Container {
           .replaceAll(PROXY_AUTH_TOKEN, "[placeholder]")
       };
       await this.ctx.storage.put("agent-diagnostic", this.lastAgentDiagnostic);
-      const code = /^(?:claude|transcript)_[a-z_]+$/.test(error?.message || "")
+      const code = /^(?:claude|sdk|transcript)_[a-z_]+$/.test(error?.message || "")
         ? error.message : "agent_upstream_error";
       console.error("Agent execution failed", code);
       return { ok: false, status: 502, code };
@@ -535,6 +594,12 @@ export default {
         requireAdmin(request, env);
         if (!env.GLM_API_KEY) throw new ApiError(503, "probe_unconfigured");
         const result = await service.modelProbe();
+        return json(result, result.ok ? 200 : 502);
+      }
+      if (request.method === "POST" && pathname === "/test-agent-sdk") {
+        requireAdmin(request, env);
+        if (!env.SERVICE_GLM_API_KEY) throw new ApiError(503, "service_unconfigured");
+        const result = await service.sdkProbe();
         return json(result, result.ok ? 200 : 502);
       }
       if (request.method === "POST" && pathname === "/v1/admin/clients") {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ApiError, buildClaudeInput, callGlmOcr, parseImage, readJson,
+import { ApiError, callGlmOcr, parseImage, readJson,
   selectAgentModel, validateAgent } from "./service.js";
 
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9C9S8AAAAASUVORK5CYII=";
@@ -58,15 +58,7 @@ test("OCR forwards only the image to the fixed provider and returns recognized t
   assert.equal(result.provider_request_id, "test-id");
 });
 
-test("Agent sends query and original image blocks to Claude Code", () => {
-  const input = JSON.parse(buildClaudeInput("What is in this image?", [
-    parseImage({ mime_type: "image/png", data: png })
-  ]));
-  assert.equal(input.type, "user");
-  assert.equal(input.message.content[0].text, "What is in this image?");
-  assert.equal(input.message.content[1].type, "image");
-  assert.equal(input.message.content[1].source.media_type, "image/png");
-  assert.equal(input.message.content[1].source.data, png);
+test("Agent keeps image sessions on the vision-capable model", () => {
   assert.equal(selectAgentModel(null, []), "glm-5.3");
   assert.equal(selectAgentModel(null, [{}]), "glm-5.3-flash");
   assert.equal(selectAgentModel("glm-5.3-flash", []), "glm-5.3-flash");

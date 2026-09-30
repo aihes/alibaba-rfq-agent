@@ -114,15 +114,6 @@ export function selectAgentModel(previousModel, images) {
   return images.length || previousModel === AGENT_IMAGE_MODEL ? AGENT_IMAGE_MODEL : AGENT_MODEL;
 }
 
-export function buildClaudeInput(query, images) {
-  const content = [{ type: "text", text: query }, ...images.map((image) => ({
-    type: "image",
-    source: { type: "base64", media_type: image.mime_type, data: image.data }
-  }))];
-  return `${JSON.stringify({ type: "user", message: { role: "user", content },
-    parent_tool_use_id: null })}\n`;
-}
-
 export async function callGlmOcr(image, apiKey, request = fetch) {
   let response;
   try {

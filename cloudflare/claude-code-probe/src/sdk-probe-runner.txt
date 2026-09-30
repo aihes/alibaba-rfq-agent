@@ -1,0 +1,37 @@
+import { query } from "/tmp/rfq-agent-sdk/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs";
+
+const observation = { skill_loaded: false, tools_used: [], answer: null, error: null };
+try {
+  for await (const message of query({
+    prompt: "/rfq-quote-advisor\n\n先用 Bash 执行 printf SDK_TOOL_OK，再说明为什么历史 PI 不能证明当前售价。回答最后写 SDK_PROBE_OK。",
+    options: {
+      cwd: "/tmp/rfq-agent",
+      model: "glm-5.3",
+      maxTurns: 4,
+      settingSources: ["project"],
+      skills: ["rfq-quote-advisor"],
+      permissionMode: "bypassPermissions",
+      allowDangerouslySkipPermissions: true,
+      env: { ...process.env, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" }
+    }
+  })) {
+    if (message.type === "system" && message.subtype === "init") {
+      observation.skill_loaded = JSON.stringify(message.skills ?? []).includes("rfq-quote-advisor");
+    }
+    if (message.type === "assistant") {
+      for (const block of message.message?.content ?? []) {
+        if (block.type === "tool_use" && !observation.tools_used.includes(block.name)) {
+          observation.tools_used.push(block.name);
+        }
+      }
+    }
+    if (message.type === "result") {
+      observation.answer = message.result ?? null;
+      if (message.is_error) observation.error = message.subtype ?? "sdk_result_error";
+    }
+  }
+} catch (error) {
+  observation.error = `${error.name}: ${String(error.message).slice(0, 500)}`;
+  process.exitCode = 1;
+}
+console.log(JSON.stringify(observation));

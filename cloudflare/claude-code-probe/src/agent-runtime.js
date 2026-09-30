@@ -16,34 +16,6 @@ export function agentPrompt(query, skill) {
   return skill === SKILL_NAME ? `/${SKILL_NAME}\n\n${query}` : query;
 }
 
-export function agentCliArgs({ nativeId, model, resume, skill }) {
-  return [
-    "claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json",
-    "--verbose", resume ? "--resume" : "--session-id", nativeId,
-    "--model", model, "--max-turns", "20",
-    "--append-system-prompt", TOOL_BOUNDARY,
-    "--permission-mode", "bypassPermissions", "--permission-prompts", "none"
-  ];
-}
-
-export function parseClaudeOutput(output) {
-  let result = null;
-  const toolsUsed = new Set();
-  for (const line of output.trim().split("\n")) {
-    let event;
-    try { event = JSON.parse(line); } catch { continue; }
-    if (event.type === "result") result = event;
-    if (event.type === "assistant") {
-      for (const block of event.message?.content ?? []) {
-        if (block?.type === "tool_use" && typeof block.name === "string") {
-          toolsUsed.add(block.name);
-        }
-      }
-    }
-  }
-  return { result, toolsUsed: [...toolsUsed] };
-}
-
 export const dropToNode = "process.setgid(1000);process.setuid(1000);";
 export const runAsNodeScript = `${dropToNode}const {spawn}=require('child_process');const child=spawn(process.argv[1],process.argv.slice(2),{stdio:'inherit',env:process.env,cwd:process.cwd()});child.on('error',e=>{console.error(e.message);process.exit(1)});child.on('exit',(code,signal)=>process.exit(code??(signal?143:1)))`;
 export const writeSkillScript = `${dropToNode}const fs=require('fs'),p=require('path'),f=process.argv[1],parts=[];process.stdin.on('data',x=>parts.push(x));process.stdin.on('end',()=>{fs.mkdirSync(p.dirname(f),{recursive:true,mode:0o700});fs.writeFileSync(f,Buffer.concat(parts),{mode:0o600})})`;

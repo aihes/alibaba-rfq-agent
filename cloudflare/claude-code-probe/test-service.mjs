@@ -39,6 +39,15 @@ try {
     throw new Error("Agent did not preserve the expected session context.");
   }
 
+  const skill = await post("/v1/agent", token, {
+    query: "先用 Bash 执行 printf RFQ_TOOL_OK，再按报价 Skill 说明历史 PI 是否能证明今天的售价。回答中包含 RFQ_TOOL_OK。"
+  });
+  console.log(`RFQ Skill: skill=${skill.skill}, tools=${skill.tools_used?.join(",")}`);
+  if (skill.skill !== "rfq-quote-advisor" || !skill.tools_used?.includes("Bash") ||
+      !skill.answer?.includes("RFQ_TOOL_OK")) {
+    throw new Error("Agent SDK did not run the RFQ Skill and Bash tool.");
+  }
+
   if (imagePath) {
     const bytes = await readFile(imagePath);
     const mime = bytes[0] === 137 && bytes[1] === 80 ? "image/png"
@@ -56,7 +65,7 @@ try {
     console.log(`Agent with image: mode=${agent.image_handling}, answer=${agent.answer.slice(0, 300)}`);
     if (agent.image_handling !== "claude-code-direct" || agent.model !== "glm-5.3-flash" ||
         agent.image_count !== 1 || !agent.answer) {
-      throw new Error("Claude Code did not receive the image directly.");
+      throw new Error("Agent SDK did not receive the image directly.");
     }
   }
 } catch (error) {

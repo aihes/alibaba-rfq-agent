@@ -3,7 +3,7 @@
   "name": "rfq-claude-code-probe",
   "account_id": "896cf17e8a4529974ae1b9dae82c2d23",
   "main": "src/index.js",
-  "rules": [{ "type": "Text", "globs": ["**/*.md"], "fallthrough": true }],
+  "rules": [{ "type": "Text", "globs": ["**/*.md", "**/*.txt"], "fallthrough": true }],
   "compatibility_date": "2026-09-29",
   "workers_dev": true,
   "routes": [

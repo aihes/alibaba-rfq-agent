@@ -1,0 +1,55 @@
+import { query } from "/tmp/rfq-agent-sdk/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs";
+
+const chunks = [];
+for await (const chunk of process.stdin) chunks.push(chunk);
+const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+const content = [
+  { type: "text", text: input.prompt },
+  ...input.images.map(image => ({ type: "image", source: {
+    type: "base64", media_type: image.mime_type, data: image.data
+  } }))
+];
+async function* imagePrompt() {
+  yield { type: "user", session_id: input.nativeId, parent_tool_use_id: null,
+    message: { role: "user", content } };
+}
+
+const observation = { session_id: null, answer: null, tools_used: [], error: null };
+try {
+  const options = {
+    cwd: input.cwd,
+    model: input.model,
+    maxTurns: 20,
+    settingSources: ["project"],
+    skills: input.skill ? [input.skill] : [],
+    systemPrompt: { type: "preset", preset: "claude_code", append: input.toolBoundary },
+    permissionMode: "bypassPermissions",
+    allowDangerouslySkipPermissions: true,
+    env: { ...process.env, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
+    ...(input.resume ? { resume: input.nativeId } : { sessionId: input.nativeId })
+  };
+  for await (const message of query({
+    prompt: input.images.length ? imagePrompt() : input.prompt,
+    options
+  })) {
+    if (message.type === "system" && message.subtype === "init") {
+      observation.session_id = message.session_id;
+    }
+    if (message.type === "assistant") {
+      for (const block of message.message?.content ?? []) {
+        if (block.type === "tool_use" && !observation.tools_used.includes(block.name)) {
+          observation.tools_used.push(block.name);
+        }
+      }
+    }
+    if (message.type === "result") {
+      observation.session_id = message.session_id;
+      observation.answer = message.result ?? null;
+      if (message.is_error) observation.error = message.subtype ?? "sdk_result_error";
+    }
+  }
+} catch (error) {
+  observation.error = `${error.name}: ${String(error.message).slice(0, 500)}`;
+  process.exitCode = 1;
+}
+console.log(JSON.stringify(observation));

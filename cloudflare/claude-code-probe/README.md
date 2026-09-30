@@ -1,20 +1,22 @@
 # Cloudflare GLM service and Claude Code probe
 
 This Worker exposes authenticated agent and OCR APIs while retaining the earlier
-fixed Claude Code probe. Claude Code is the agent runtime; its model backend is
+fixed Claude Code probe. The production agent runs the Claude Agent SDK inside
+a Cloudflare Container; its model backend is
 GLM, not an Anthropic-hosted Claude model. API keys stay in Cloudflare secrets; the RFQ desktop app
 uses these remote APIs by default. It is deployed at `https://glm.knowflow.work/` and
 `https://claude-probe.knowflow.work/` on the account with Containers access.
 
-The Worker uses the public `node:22-slim` image. On the first authorized
-request of each container lifetime, it installs the pinned Anthropic Claude Code
-npm package and runs a version check. `GET /version` returns that version.
+The Worker uses the public `node:22-slim` image. Production Agent requests
+install the pinned `@anthropic-ai/claude-agent-sdk@0.3.285` package in each
+ephemeral container. The older diagnostic endpoints install the pinned Claude
+Code CLI package; `GET /version` returns that CLI version.
 `POST /test-model` runs a fixed prompt through `GLM-5.3[1m]` using the same
 Anthropic-compatible endpoint configured locally. It disables Claude's tools
 and session persistence. The legacy probe and Agent API share one container
 instance because this deployment allows only one running instance. The Worker
-stops the container after a completed Claude Code call; a 45-second idle sleep
-is a fallback. Each cold start installs the package again because the
+stops the container after a completed Agent call; a 45-second idle sleep
+is a fallback. Each cold start installs the relevant package again because the
 container filesystem is ephemeral.
 
 `PROBE_TOKEN`, `GLM_API_KEY`, and `SERVICE_GLM_API_KEY` must be configured as
@@ -23,7 +25,7 @@ with `api.z.ai` for Claude Code and `open.bigmodel.cn` for GLM-OCR. It is
 separate from the personal Coding Plan key used by the older probe. The
 service key is used for GLM-5.3, GLM-5.3-Flash, and GLM-OCR.
 Do not commit or print them. The root route only reports Worker readiness;
-both legacy probe routes require `Authorization: Bearer <PROBE_TOKEN>` before
+the probe routes require `Authorization: Bearer <PROBE_TOKEN>` before
 starting the container. The model key stays in the Worker runtime. Cloudflare's
 container outbound handler intercepts model requests and adds the key outside
 the container. Claude Code receives only a non-secret placeholder token. Model
@@ -46,27 +48,29 @@ token under Settings → Model service; cloud OCR reuses it.
 `POST /v1/agent` accepts a `query`, an optional `session_id`, an optional
 `skill`, and up to two `images`. The default skill is `rfq-quote-advisor`,
 bundled from `src/skills/rfq-quote-advisor/SKILL.md` in this repository and
-installed as a native Claude Code project Skill before each run. Set
+installed as a native project Skill before each run. Set
 `"skill":null` for a general request. Clients cannot upload or modify Skills
-through this API. Claude Code can use its built-in tools, including Bash,
+through this API. The Agent SDK can use Claude Code's built-in tools, including Bash,
 file operations, web tools, and the Skill tool, for up to 20 turns in one
 request. The Worker forwards the query and original image blocks directly to
-Claude Code. It does not run OCR or assemble its own conversation history for
+the SDK. It does not run OCR or assemble its own conversation history for
 this route. New text-only sessions use GLM-5.3; requests with images use
 GLM-5.3-Flash. Once a session has received an image, it stays on Flash so
 follow-up turns can use its visual context. The response contains `answer`,
 `session_id`, `model`, `skill`, `tools_used`, `image_handling`, `image_count`,
-and `quota_remaining`. `tools_used` lists tool names observed in Claude Code's
-stream output; it is empty when a request does not call a tool. A Skill invoked
+and `quota_remaining`. `tools_used` lists tool names observed in the SDK's
+message stream; it is empty when a request does not call a tool. A Skill invoked
 through its slash command can be expanded before a `Skill` tool event, so its
 name need not appear in `tools_used` even when its instructions were loaded.
-Sessions are scoped to the client token. Claude Code's own `--session-id` and
-`--resume` handle continuity; the Worker saves its transcript in Durable Object
+Sessions are scoped to the client token. The SDK's `sessionId` and `resume`
+options handle continuity; the Worker saves its native transcript in Durable Object
 storage so it can be restored after the container sleeps. A request changes
 the native session if it switches between RFQ and general mode. Each Agent
 call uses an ephemeral workspace and destroys its container afterward, so
 files written by tools do not persist across API calls. Transcript context
-does persist. The upstream GLM compatibility layer may not support every
+does persist. The `image_handling` value remains `claude-code-direct` for API
+compatibility; original image blocks now pass through the SDK. The upstream
+GLM compatibility layer may not support every
 Claude Code tool; verify each tool against the deployed service.
 
 ```http
@@ -104,7 +108,7 @@ An administrator calls `POST /v1/admin/clients` with
 The response returns the client token **once**. The administrator can revoke
 it with `DELETE /v1/admin/clients/<client_id>` using the same admin header.
 
-The server stores Claude Code's native session transcript in Cloudflare Durable
+The server stores the Agent SDK's native session transcript in Cloudflare Durable
 Object storage, with a 32 MiB transcript limit per session. After seven days
 without activity, the next successful call starts a new session. This is not
 yet a timed data deletion policy: an inactive transcript is removed on that
@@ -141,6 +145,34 @@ used Bash to write and read `RFQ_TOOL_OK`, loaded the RFQ Skill's specific
 read `RFQ OCR 456` directly from a PNG using `glm-5.3-flash`. The authorized
 legacy probe returned `GLM_REMOTE_OK`; an unauthorized probe returned 401.
 These checks verify the named tools and image path, not every Claude Code tool.
+
+### Claude Agent SDK container probe
+
+`POST /test-agent-sdk` is a fixed, administrator-token-protected diagnostic. It
+installs `@anthropic-ai/claude-agent-sdk@0.3.285` in the ephemeral Cloudflare
+Container, loads the same bundled `rfq-quote-advisor` Skill, and runs the SDK's
+`query()` with a fixed task that invokes Bash and explains why an old PI cannot
+establish today's selling price. Model traffic still passes through the Worker
+outbound proxy; the upstream key does not enter the container. Production
+`/v1/agent` now uses the same pinned SDK through a separate input-aware runner.
+
+On 2026-09-30, Worker version `528d9575-e8f7-43fa-9b98-a71df3fd7ca5`
+returned HTTP 200 with `ok: true`, `skill_loaded: true`, `tools_used: ["Bash"]`,
+`proxy.calls: 2`, and `SDK_PROBE_OK` in the answer. A call without the admin
+token returned HTTP 401. The existing two-turn `/v1/agent` service test still
+returned `REMOTE_AGENT_OK` after deployment. This demonstrates the SDK works
+inside the Worker-managed Container, not directly in the Worker isolate. It is
+not proof that every SDK tool works with GLM. At that point the client API had
+not yet migrated.
+
+On 2026-09-30, Worker version `9f53b465-90f0-4a3a-a06c-146ec9a1c29a`
+switched production `/v1/agent` to the SDK. A fresh text session and its
+follow-up both returned `REMOTE_AGENT_OK`; the second request restored context
+from Durable Object storage after the first container stopped. A production
+request loaded the RFQ Skill and invoked Bash. A PNG request returned `456`
+through `glm-5.3-flash`; a follow-up in a fresh container again returned `456`
+with the same session ID. Temporary client tokens used for these final checks
+were revoked afterward. These are live service checks, not desktop package checks.
 
 On 2026-09-29, public `GET /` returned `worker-ready`, unauthenticated
 `GET /version` returned HTTP 401, and the authorized version check returned
