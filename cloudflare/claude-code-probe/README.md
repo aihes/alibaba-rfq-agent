@@ -1,7 +1,8 @@
 # Cloudflare GLM service and Claude Code probe
 
 This Worker exposes authenticated agent and OCR APIs while retaining the earlier
-fixed Claude Code probe. API keys stay in Cloudflare secrets; the RFQ desktop app
+fixed Claude Code probe. Claude Code is the agent runtime; its model backend is
+GLM, not an Anthropic-hosted Claude model. API keys stay in Cloudflare secrets; the RFQ desktop app
 uses these remote APIs by default. It is deployed at `https://glm.knowflow.work/` and
 `https://claude-probe.knowflow.work/` on the account with Containers access.
 
@@ -23,9 +24,13 @@ separate from the personal Coding Plan key used by the older probe. The
 service key is used for GLM-5.3, GLM-5.3-Flash, and GLM-OCR.
 Do not commit or print them. The root route only reports Worker readiness;
 both legacy probe routes require `Authorization: Bearer <PROBE_TOKEN>` before
-starting the container. The model key is passed to the Claude process as an
-environment variable for that invocation and is never placed in command
-arguments or a response.
+starting the container. The model key stays in the Worker runtime. Cloudflare's
+container outbound handler intercepts model requests and adds the key outside
+the container. Claude Code receives only a non-secret placeholder token. Model
+egress is limited to the Messages endpoint, the selected model, 40 calls per
+run, and 32,000 output tokens per call. The legacy probe uses the same pattern
+with its separate key. Neither key is placed in the container environment or
+a response.
 
 The desktop app saves its client token in encrypted local settings.
 
@@ -38,16 +43,31 @@ can revoke it. Never bundle `PROBE_TOKEN`, `GLM_API_KEY`, or
 issue a distinct client token for each installation. The desktop app accepts the
 token under Settings → Model service; cloud OCR reuses it.
 
-`POST /v1/agent` accepts a `query`, an optional `session_id`, and up to two
-`images`. The Worker forwards the query and original image blocks directly to
+`POST /v1/agent` accepts a `query`, an optional `session_id`, an optional
+`skill`, and up to two `images`. The default skill is `rfq-quote-advisor`,
+bundled from `src/skills/rfq-quote-advisor/SKILL.md` in this repository and
+installed as a native Claude Code project Skill before each run. Set
+`"skill":null` for a general request. Clients cannot upload or modify Skills
+through this API. Claude Code can use its built-in tools, including Bash,
+file operations, web tools, and the Skill tool, for up to 20 turns in one
+request. The Worker forwards the query and original image blocks directly to
 Claude Code. It does not run OCR or assemble its own conversation history for
 this route. New text-only sessions use GLM-5.3; requests with images use
 GLM-5.3-Flash. Once a session has received an image, it stays on Flash so
 follow-up turns can use its visual context. The response contains `answer`,
-`session_id`, `model`, `image_handling`, `image_count`, and `quota_remaining`.
+`session_id`, `model`, `skill`, `tools_used`, `image_handling`, `image_count`,
+and `quota_remaining`. `tools_used` lists tool names observed in Claude Code's
+stream output; it is empty when a request does not call a tool. A Skill invoked
+through its slash command can be expanded before a `Skill` tool event, so its
+name need not appear in `tools_used` even when its instructions were loaded.
 Sessions are scoped to the client token. Claude Code's own `--session-id` and
 `--resume` handle continuity; the Worker saves its transcript in Durable Object
-storage so it can be restored after the container sleeps.
+storage so it can be restored after the container sleeps. A request changes
+the native session if it switches between RFQ and general mode. Each Agent
+call uses an ephemeral workspace and destroys its container afterward, so
+files written by tools do not persist across API calls. Transcript context
+does persist. The upstream GLM compatibility layer may not support every
+Claude Code tool; verify each tool against the deployed service.
 
 ```http
 POST /v1/agent
@@ -112,6 +132,15 @@ returned HTTP 401 after the administrator revoked it. These checks prove the
 remote API paths; desktop integration is tested separately.
 The legacy fixed prompt was also retested after the shared-container change
 and returned `GLM_REMOTE_OK`.
+
+On 2026-09-30, the updated Worker used a native project Skill bundled from this
+repository and enabled Claude Code's built-in tools with a 20-turn limit. The
+deployed service returned `REMOTE_AGENT_OK` across two calls to one session,
+used Bash to write and read `RFQ_TOOL_OK`, loaded the RFQ Skill's specific
+`riskFlags` guidance, used WebFetch to read the title `Example Domain`, and
+read `RFQ OCR 456` directly from a PNG using `glm-5.3-flash`. The authorized
+legacy probe returned `GLM_REMOTE_OK`; an unauthorized probe returned 401.
+These checks verify the named tools and image path, not every Claude Code tool.
 
 On 2026-09-29, public `GET /` returned `worker-ready`, unauthenticated
 `GET /version` returned HTTP 401, and the authorized version check returned

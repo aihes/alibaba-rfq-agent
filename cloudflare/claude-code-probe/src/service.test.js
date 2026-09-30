@@ -19,6 +19,10 @@ test("agent validates session ids and limits images", () => {
   const input = validateAgent({ query: "  summarize ", session_id: "case_123", images: [] });
   assert.equal(input.query, "  summarize ");
   assert.equal(input.sessionId, "case_123");
+  assert.equal(input.skill, "rfq-quote-advisor");
+  assert.equal(validateAgent({ query: "other task", skill: null }).skill, null);
+  assert.throws(() => validateAgent({ query: "ok", skill: "../../secret" }),
+    (error) => error instanceof ApiError && error.code === "invalid_skill");
   assert.throws(() => validateAgent({ query: "ok", session_id: "../other-client" }),
     (error) => error instanceof ApiError && error.code === "invalid_session_id");
   assert.throws(() => validateAgent({ query: "ok", images: [{}, {}, {}] }),

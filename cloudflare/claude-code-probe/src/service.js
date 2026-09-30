@@ -98,7 +98,12 @@ export function validateAgent(body) {
   }
   const rawImages = body.images ?? [];
   if (!Array.isArray(rawImages) || rawImages.length > MAX_IMAGES) throw new ApiError(400, "invalid_images");
-  return { sessionId, query, images: rawImages.map(parseImage) };
+  // The RFQ service defaults to its server-owned skill, including for desktop
+  // versions that predate an explicit skill selector. Other workloads can opt
+  // out, but a client cannot upload executable skill text or pick a path.
+  const skill = body.skill === undefined ? "rfq-quote-advisor" : body.skill;
+  if (skill !== null && skill !== "rfq-quote-advisor") throw new ApiError(400, "invalid_skill");
+  return { sessionId, query, images: rawImages.map(parseImage), skill };
 }
 
 export function validateOcr(body) {

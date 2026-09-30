@@ -1,8 +1,14 @@
 import { requireAccessAdmin, clientConfig, publicClient } from "./admin-auth.js";
 import { adminHtml, adminCss, adminJs } from "./admin-page.js";
 import { Container, getContainer } from "@cloudflare/containers";
+export { ContainerProxy } from "@cloudflare/containers";
+import quoteSkill from "../../../src/skills/rfq-quote-advisor/SKILL.md";
+import { AGENT_WORKSPACE, CLAUDE_CONFIG_DIR, SKILL_FILE, SKILL_NAME,
+  PROBE_MODEL_URL, PROXY_AUTH_TOKEN, RUN_TIMEOUT_MS, SERVICE_MODEL_URL,
+  agentCliArgs, agentPrompt, dropToNode, parseClaudeOutput, runAsNodeScript,
+  modelRequestAllowed, writeSkillScript } from "./agent-runtime.js";
 import {
-  ANTHROPIC_URL, ApiError, buildClaudeInput, callGlmOcr, readJson,
+  ApiError, buildClaudeInput, callGlmOcr, readJson,
   selectAgentModel, validateAgent, validateOcr
 } from "./service.js";
 
@@ -11,9 +17,37 @@ const decoder = new TextDecoder();
 const SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 const SESSION_CHUNK_BYTES = 1024 * 1024;
 const MAX_SESSION_BYTES = 32 * 1024 * 1024;
-const CLAUDE_CONFIG_DIR = "/tmp/rfq-claude-config";
-const transcriptPath = (nativeId) => `${CLAUDE_CONFIG_DIR}/projects/-tmp/${nativeId}.jsonl`;
-const writeTranscriptScript = "const fs=require('fs'),p=require('path'),f=process.argv[1],parts=[];process.stdin.on('data',x=>parts.push(x));process.stdin.on('end',()=>{fs.mkdirSync(p.dirname(f),{recursive:true,mode:0o700});fs.writeFileSync(f,Buffer.concat(parts),{mode:0o600})})";
+const transcriptPath = (nativeId) => `${CLAUDE_CONFIG_DIR}/projects/-tmp-rfq-agent/${nativeId}.jsonl`;
+const writeTranscriptScript = `${dropToNode}const fs=require('fs'),p=require('path'),f=process.argv[1],parts=[];process.stdin.on('data',x=>parts.push(x));process.stdin.on('end',()=>{fs.mkdirSync(p.dirname(f),{recursive:true,mode:0o700});fs.writeFileSync(f,Buffer.concat(parts),{mode:0o600})})`;
+
+async function forwardModelRequest(request, env, ctx, provider) {
+  let body;
+  try {
+    body = await readJson(request.clone(), 16 * 1024 * 1024);
+  } catch {
+    return new Response("Invalid model request", { status: 400 });
+  }
+  const stub = env.CLAUDE_CODE_PROBE.get(
+    env.CLAUDE_CODE_PROBE.idFromString(ctx.containerId));
+  const authorization = await stub.authorizeModelRequest({
+    url: request.url, method: request.method, model: body.model,
+    maxTokens: body.max_tokens
+  });
+  if (!authorization.allowed) return new Response("Model request denied", { status: 403 });
+  const key = provider === "service" ? env.SERVICE_GLM_API_KEY : env.GLM_API_KEY;
+  if (!key) return new Response("Model service unavailable", { status: 503 });
+  const headers = new Headers(request.headers);
+  headers.delete("x-api-key");
+  headers.set("Authorization", `Bearer ${key}`);
+  headers.delete("Cookie");
+  headers.delete("Host");
+  const upstreamHost = provider === "service" ? "api.z.ai" : "open.bigmodel.cn";
+  const upstreamUrl = new URL(request.url);
+  upstreamUrl.protocol = "https:";
+  upstreamUrl.hostname = upstreamHost;
+  return fetch(new Request(upstreamUrl, { method: request.method, headers,
+    body: await request.arrayBuffer(), redirect: "manual" }));
+}
 
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }
@@ -31,6 +65,32 @@ export class ClaudeCodeProbe extends Container {
   sleepAfter = "45s";
   runTail = Promise.resolve();
   pendingRuns = 0;
+  activeRun = null;
+  lastAgentDiagnostic = null;
+  agentStage = null;
+
+  async agentDiagnostic() {
+    return await this.ctx.storage.get("agent-diagnostic") ?? null;
+  }
+
+  async authorizeModelRequest(requestInfo) {
+    if (!modelRequestAllowed(requestInfo, this.activeRun)) {
+      if (this.activeRun) this.activeRun.lastDenial =
+        `route_or_budget:${requestInfo.method}:${requestInfo.url}:${this.activeRun.provider}:${this.activeRun.calls}`;
+      return { allowed: false };
+    }
+    const modelMatches = requestInfo.model === this.activeRun.model ||
+      (this.activeRun.provider === "probe" && this.activeRun.model === "GLM-5.3[1m]" &&
+        requestInfo.model === "GLM-5.3");
+    if (!modelMatches ||
+        !Number.isInteger(requestInfo.maxTokens) || requestInfo.maxTokens < 1 ||
+        requestInfo.maxTokens > 32_000) {
+      this.activeRun.lastDenial = `model_or_tokens:${String(requestInfo.model).slice(0, 40)}:${requestInfo.maxTokens}`;
+      return { allowed: false };
+    }
+    this.activeRun.calls += 1;
+    return { allowed: true };
+  }
 
   async exclusive(run) {
     const previous = this.runTail;
@@ -85,6 +145,17 @@ export class ClaudeCodeProbe extends Container {
     if ((await process.output()).exitCode !== 0) throw new Error("transcript_restore_failed");
   }
 
+  async installSkill() {
+    const bytes = new TextEncoder().encode(quoteSkill);
+    const stdin = new ReadableStream({
+      start(controller) { controller.enqueue(bytes); controller.close(); }
+    });
+    const process = await this.ctx.container.exec(
+      ["node", "-e", writeSkillScript, SKILL_FILE],
+      { stdin, stdout: "ignore" });
+    if ((await process.output()).exitCode !== 0) throw new Error("skill_install_failed");
+  }
+
   async readTranscript(nativeId) {
     const process = await this.ctx.container.exec(["cat", transcriptPath(nativeId)]);
     const output = await process.output();
@@ -94,71 +165,114 @@ export class ClaudeCodeProbe extends Container {
     return new Uint8Array(output.stdout);
   }
 
-  async runClaude(query, images, apiKey, model, nativeId, previousTranscript) {
+  async runClaude(query, images, model, nativeId, previousTranscript, skill) {
+    this.agentStage = "ensure_claude";
     await this.ensureClaude();
+    this.agentStage = "prepare_workspace";
+    if (skill === SKILL_NAME) await this.installSkill();
+    else {
+      const directory = await this.ctx.container.exec(
+        ["node", "-e", `${dropToNode}require('fs').mkdirSync(process.argv[1],{recursive:true,mode:0o700})`, AGENT_WORKSPACE],
+        { stdout: "ignore" });
+      if ((await directory.output()).exitCode !== 0) throw new Error("workspace_create_failed");
+    }
+    this.agentStage = "restore_transcript";
     if (previousTranscript) await this.restoreTranscript(nativeId, previousTranscript);
-    const input = new TextEncoder().encode(buildClaudeInput(query, images));
+    const input = new TextEncoder().encode(buildClaudeInput(agentPrompt(query, skill), images));
     const stdin = new ReadableStream({
       start(controller) {
         controller.enqueue(input);
         controller.close();
       }
     });
-    const process = await this.ctx.container.exec(
-      ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json",
-        "--verbose", previousTranscript ? "--resume" : "--session-id", nativeId,
-        "--model", model, "--max-turns", "1", "--tools", ""],
-      {
-        cwd: "/tmp",
-        stdin,
-        env: {
-          ANTHROPIC_AUTH_TOKEN: apiKey,
-          ANTHROPIC_BASE_URL: ANTHROPIC_URL,
-          ANTHROPIC_MODEL: model,
-          CLAUDE_CONFIG_DIR,
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
-        }
-      }
-    );
-    const timer = setTimeout(() => process.kill(), 180_000);
+    this.activeRun = { provider: "service", model, calls: 0,
+      expiresAt: Date.now() + RUN_TIMEOUT_MS };
     let output;
+    let proxyStats;
     try {
-      output = await process.output();
-    } finally {
-      clearTimeout(timer);
-    }
-    const result = decoder.decode(output.stdout).trim().split("\n").reduce((last, line) => {
+      this.agentStage = "start_agent";
+      const process = await this.ctx.container.exec(
+        ["node", "-e", runAsNodeScript,
+          ...agentCliArgs({ nativeId, model, resume: Boolean(previousTranscript), skill })],
+        {
+          cwd: AGENT_WORKSPACE,
+          stdin,
+          env: {
+            HOME: "/home/node",
+            ANTHROPIC_AUTH_TOKEN: PROXY_AUTH_TOKEN,
+            ANTHROPIC_BASE_URL: SERVICE_MODEL_URL,
+            ANTHROPIC_MODEL: model,
+            CLAUDE_CONFIG_DIR,
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+          }
+        }
+      );
+      const timer = setTimeout(() => process.kill(), RUN_TIMEOUT_MS);
       try {
-        const event = JSON.parse(line);
-        return event.type === "result" ? event : last;
-      } catch {
-        return last;
+        this.agentStage = "wait_agent";
+        output = await process.output();
+      } finally {
+        clearTimeout(timer);
       }
-    }, null);
+    } finally {
+      proxyStats = { calls: this.activeRun?.calls ?? 0,
+        last_denial: this.activeRun?.lastDenial ?? null };
+      this.activeRun = null;
+    }
+    const { result, toolsUsed } = parseClaudeOutput(decoder.decode(output.stdout));
     if (output.exitCode !== 0 || !result || result.is_error || typeof result.result !== "string") {
+      this.lastAgentDiagnostic = {
+        exit_code: output.exitCode, result_type: result?.type ?? null,
+        result_subtype: result?.subtype ?? null, is_error: result?.is_error ?? null,
+        proxy: proxyStats,
+        stderr: decoder.decode(output.stderr).trim().slice(-1200)
+          .replaceAll(PROXY_AUTH_TOKEN, "[placeholder]")
+      };
       throw new Error("claude_upstream_error");
     }
+    this.lastAgentDiagnostic = null;
     if (result.session_id !== nativeId) throw new Error("claude_session_mismatch");
-    return { answer: result.result.trim().slice(0, 12_000),
+    this.agentStage = "read_transcript";
+    return { answer: result.result.trim().slice(0, 12_000), toolsUsed,
       transcript: await this.readTranscript(nativeId) };
   }
 
-  async modelProbe(authToken, baseUrl) {
+  async modelProbe() {
     return this.exclusive(async () => {
       await this.ensureClaude();
-      const process = await this.ctx.container.exec(
-        ["claude", "-p", "Reply exactly GLM_REMOTE_OK", "--model", "GLM-5.3[1m]",
-          "--output-format", "json", "--max-turns", "1", "--tools", "",
-          "--disallowedTools", "mcp__*", "--restricted", "--no-session-persistence"],
-        { cwd: "/tmp", env: { ANTHROPIC_AUTH_TOKEN: authToken,
-          ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_MODEL: "GLM-5.3[1m]",
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } }
-      );
-      const output = await process.output();
+      this.activeRun = { provider: "probe", model: "GLM-5.3[1m]", calls: 0,
+        expiresAt: Date.now() + RUN_TIMEOUT_MS };
+      let output;
+      let proxyStats;
+      try {
+        const process = await this.ctx.container.exec(
+          ["claude", "-p", "Reply exactly GLM_REMOTE_OK", "--model", "GLM-5.3[1m]",
+            "--output-format", "json", "--max-turns", "1", "--tools", "",
+            "--disallowedTools", "mcp__*", "--restricted", "--no-session-persistence"],
+          { cwd: "/tmp", env: { ANTHROPIC_AUTH_TOKEN: PROXY_AUTH_TOKEN,
+            ANTHROPIC_BASE_URL: PROBE_MODEL_URL,
+            ANTHROPIC_MODEL: "GLM-5.3[1m]",
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } }
+        );
+        const timer = setTimeout(() => process.kill(), 90_000);
+        try {
+          output = await process.output();
+        } finally {
+          clearTimeout(timer);
+        }
+      } finally {
+        proxyStats = { calls: this.activeRun?.calls ?? 0,
+          last_denial: this.activeRun?.lastDenial ?? null };
+        this.activeRun = null;
+      }
       let response;
       try { response = JSON.parse(decoder.decode(output.stdout)); } catch { response = null; }
       if (output.exitCode !== 0 || response?.is_error || typeof response?.result !== "string") {
-        return { ok: false, category: "cli_or_provider", exitCode: output.exitCode };
+        const detail = decoder.decode(output.stderr).trim().slice(-1200) ||
+          decoder.decode(output.stdout).trim().slice(-1200);
+        return { ok: false, category: "cli_or_provider", exitCode: output.exitCode,
+          proxy: proxyStats,
+          detail: detail.replaceAll(PROXY_AUTH_TOKEN, "[placeholder]") };
       }
       return { ok: true, model: "GLM-5.3[1m]", result: response.result.trim() };
     });
@@ -280,7 +394,7 @@ export class ClaudeCodeProbe extends Container {
     return bytes;
   }
 
-  async saveSessionTranscript(key, previous, nativeId, model, transcript) {
+  async saveSessionTranscript(key, previous, nativeId, model, skill, transcript) {
     if (transcript.byteLength > MAX_SESSION_BYTES) throw new ApiError(413, "session_too_large");
     const chunks = Math.ceil(transcript.byteLength / SESSION_CHUNK_BYTES);
     await this.ctx.storage.transaction(async (storage) => {
@@ -294,11 +408,11 @@ export class ClaudeCodeProbe extends Container {
           await storage.delete(`transcript:${previous.nativeId}:${index}`);
         }
       }
-      await storage.put(key, { nativeId, model, chunks, updatedAt: Date.now() });
+      await storage.put(key, { nativeId, model, skill, chunks, updatedAt: Date.now() });
     });
   }
 
-  async runAgent(clientId, sessionId, query, images, apiKey) {
+  async runAgent(clientId, sessionId, query, images, skill) {
     if (this.pendingRuns >= 5) return { ok: false, status: 429, code: "agent_busy" };
     this.pendingRuns += 1;
     const previous = this.runTail;
@@ -306,26 +420,38 @@ export class ClaudeCodeProbe extends Container {
     this.runTail = new Promise((resolve) => { release = resolve; });
     await previous;
     try {
+      // A failed prior shutdown must never expose another client's workspace.
+      if (this.ctx.container.running) await this.destroy();
       const key = `session:${clientId}:${sessionId}`;
       const prior = await this.ctx.storage.get(key);
-      const resumable = prior?.nativeId && Date.now() - prior.updatedAt < SESSION_LIFETIME_MS;
+      const resumable = prior?.nativeId && prior.skill === skill &&
+        Date.now() - prior.updatedAt < SESSION_LIFETIME_MS;
       const nativeId = resumable ? prior.nativeId : crypto.randomUUID();
       const transcript = resumable ? await this.loadSessionTranscript(prior) : null;
       const model = selectAgentModel(resumable ? prior.model : null, images);
-      const result = await this.runClaude(query, images, apiKey, model, nativeId, transcript);
-      await this.saveSessionTranscript(key, prior, nativeId, model, result.transcript);
+      this.lastAgentDiagnostic = null;
+      const result = await this.runClaude(query, images, model, nativeId, transcript, skill);
+      await this.saveSessionTranscript(key, prior, nativeId, model, skill, result.transcript);
+      await this.ctx.storage.delete("agent-diagnostic");
       return { ok: true, session_id: sessionId, answer: result.answer, model,
+        skill, tools_used: result.toolsUsed,
         image_handling: images.length ? "claude-code-direct" : "none",
         image_count: images.length };
     } catch (error) {
       if (error instanceof ApiError) return { ok: false, status: error.status, code: error.code };
+      if (!this.lastAgentDiagnostic) this.lastAgentDiagnostic = {
+        stage: this.agentStage ?? "container_execution", name: error?.name ?? "unknown",
+        message: String(error?.message ?? "unknown").slice(0, 800)
+          .replaceAll(PROXY_AUTH_TOKEN, "[placeholder]")
+      };
+      await this.ctx.storage.put("agent-diagnostic", this.lastAgentDiagnostic);
       const code = /^(?:claude|transcript)_[a-z_]+$/.test(error?.message || "")
         ? error.message : "agent_upstream_error";
       console.error("Agent execution failed", code);
       return { ok: false, status: 502, code };
     } finally {
       try {
-        if (this.pendingRuns === 1 && this.ctx.container.running) await this.destroy();
+        if (this.ctx.container.running) await this.destroy();
       } catch (error) {
         console.error("Container shutdown failed", error?.name ?? "unknown");
       }
@@ -334,6 +460,13 @@ export class ClaudeCodeProbe extends Container {
     }
   }
 }
+
+// Assign through the base class setter. A static class field would shadow the
+// accessor and leave ContainerProxy's handler registry empty.
+ClaudeCodeProbe.outboundByHost = {
+  "rfq-service.internal": async (request, env, ctx) => forwardModelRequest(request, env, ctx, "service"),
+  "rfq-probe.internal": async (request, env, ctx) => forwardModelRequest(request, env, ctx, "probe")
+};
 
 function requireAdmin(request, env) {
   if (!env.PROBE_TOKEN) throw new ApiError(503, "admin_unconfigured");
@@ -394,11 +527,14 @@ export default {
         requireAdmin(request, env);
         return json({ ok: true, version: await service.cliVersion() });
       }
+      if (request.method === "GET" && pathname === "/v1/admin/agent-diagnostic") {
+        requireAdmin(request, env);
+        return json({ diagnostic: await service.agentDiagnostic() });
+      }
       if (request.method === "POST" && pathname === "/test-model") {
         requireAdmin(request, env);
         if (!env.GLM_API_KEY) throw new ApiError(503, "probe_unconfigured");
-        const result = await service.modelProbe(
-          env.GLM_API_KEY, "https://open.bigmodel.cn/api/anthropic");
+        const result = await service.modelProbe();
         return json(result, result.ok ? 200 : 502);
       }
       if (request.method === "POST" && pathname === "/v1/admin/clients") {
@@ -435,7 +571,7 @@ export default {
         return json({ ...result, model: "glm-ocr", quota_remaining: charge.remaining });
       }
       const result = await service.runAgent(identity.client_id, input.sessionId, input.query,
-        input.images, env.SERVICE_GLM_API_KEY);
+        input.images, input.skill);
       if (!result.ok) throw new ApiError(result.status, result.code);
       return json({ ...result, quota_remaining: charge.remaining });
     } catch (error) {
