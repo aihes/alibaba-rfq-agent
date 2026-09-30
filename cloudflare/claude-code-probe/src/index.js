@@ -1,3 +1,5 @@
+import { requireAccessAdmin, clientConfig, publicClient } from "./admin-auth.js";
+import { adminHtml, adminCss, adminJs } from "./admin-page.js";
 import { Container, getContainer } from "@cloudflare/containers";
 import {
   ANTHROPIC_URL, ApiError, buildClaudeInput, callGlmOcr, readJson,
@@ -189,6 +191,33 @@ export class ClaudeCodeProbe extends Container {
     });
   }
 
+  async listClients(cursor) {
+    const options = { prefix: "client-id:", limit: 101 };
+    if (cursor) options.startAfter = `client-id:${cursor}`;
+    const entries = [...await this.ctx.storage.list(options)];
+    const page = entries.slice(0, 100);
+    const clients = [];
+    for (const [, hash] of page) {
+      const record = await this.ctx.storage.get(`client:${hash}`);
+      if (record) clients.push(publicClient(record));
+    }
+    return { clients, next_cursor: entries.length > 100 ? page.at(-1)[0].slice(10) : null };
+  }
+
+  async updateClient(id, name, agent, ocr) {
+    return this.ctx.storage.transaction(async storage => {
+      const hash = await storage.get(`client-id:${id}`);
+      const record = hash && await storage.get(`client:${hash}`);
+      if (!record) return { error: "client_not_found", status: 404 };
+      if (record.revoked) return { error: "client_revoked", status: 409 };
+      record.name = name;
+      record.dailyAgentLimit = agent;
+      record.dailyOcrLimit = ocr;
+      await storage.put(`client:${hash}`, record);
+      return { client: publicClient(record) };
+    });
+  }
+
   async authenticate(token) {
     if (typeof token !== "string" || !/^rfq_[A-Za-z0-9_-]{43}$/.test(token)) return null;
     const record = await this.ctx.storage.get(`client:${await tokenHash(token)}`);
@@ -328,6 +357,39 @@ export default {
     }
     const service = getContainer(env.CLAUDE_CODE_PROBE, "service");
     try {
+      if (pathname === "/admin" || pathname.startsWith("/admin/")) {
+        const email = await requireAccessAdmin(request, env);
+        const assets = { "/admin": [adminHtml, "text/html"], "/admin/": [adminHtml, "text/html"],
+          "/admin/style.css": [adminCss, "text/css"], "/admin/app.js": [adminJs, "text/javascript"] };
+        if (request.method === "GET" && assets[pathname]) {
+          const [body, type] = assets[pathname];
+          return new Response(body, { headers: { "Content-Type": `${type}; charset=utf-8`,
+            "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" } });
+        }
+        if (pathname === "/admin/api/clients") {
+          if (request.method === "GET") {
+            const cursor = new URL(request.url).searchParams.get("cursor");
+            if (cursor && !/^[a-f0-9-]{36}$/.test(cursor)) throw new ApiError(400, "invalid_cursor");
+            return json({ ...await service.listClients(cursor), email, day: new Date().toISOString().slice(0, 10) });
+          }
+          if (request.method === "POST") {
+            const { name, agent, ocr } = clientConfig(await readJson(request, 2048));
+            return json(await service.createClient(name, agent, ocr), 201);
+          }
+        }
+        const match = /^\/admin\/api\/clients\/([a-f0-9-]{36})$/.exec(pathname);
+        if (match && request.method === "PATCH") {
+          const { name, agent, ocr } = clientConfig(await readJson(request, 2048));
+          const result = await service.updateClient(match[1], name, agent, ocr);
+          return json(result, result.status || 200);
+        }
+        if (match && request.method === "DELETE") {
+          const revoked = await service.revokeClient(match[1]);
+          return json({ revoked }, revoked ? 200 : 404);
+        }
+        return json({ error: "not_found" }, 404);
+      }
       if (request.method === "GET" && pathname === "/version") {
         requireAdmin(request, env);
         return json({ ok: true, version: await service.cliVersion() });

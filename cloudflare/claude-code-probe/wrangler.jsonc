@@ -6,8 +6,14 @@
   "compatibility_date": "2026-09-29",
   "workers_dev": true,
   "routes": [
-    { "pattern": "claude-probe.knowflow.work", "custom_domain": true },
-    { "pattern": "glm.knowflow.work", "custom_domain": true }
+    {
+      "pattern": "claude-probe.knowflow.work",
+      "custom_domain": true
+    },
+    {
+      "pattern": "glm.knowflow.work",
+      "custom_domain": true
+    }
   ],
   "containers": [
     {
@@ -19,10 +25,21 @@
   ],
   "durable_objects": {
     "bindings": [
-      { "name": "CLAUDE_CODE_PROBE", "class_name": "ClaudeCodeProbe" }
+      {
+        "name": "CLAUDE_CODE_PROBE",
+        "class_name": "ClaudeCodeProbe"
+      }
     ]
   },
   "exports": {
-    "ClaudeCodeProbe": { "type": "durable-object", "storage": "sqlite" }
+    "ClaudeCodeProbe": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "vars": {
+    "ACCESS_TEAM_DOMAIN": "https://aihes.cloudflareaccess.com",
+    "ACCESS_AUD": "49a9c783852106b5eecd03e07db8ce5dc9e1d1684ad5b4cdb307310bd7d39ec4",
+    "ADMIN_EMAILS": "aihehe123@gmail.com"
   }
 }

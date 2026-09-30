@@ -144,3 +144,26 @@ Claude Code is installed again.
 Run `npm run test:remote -- --health-only` to check the public route without a
 token or a model call. The legacy `/test-model` route accepts only its fixed
 prompt; `/v1/agent` accepts custom queries for provisioned clients.
+
+## 管理后台（Cloudflare Access）
+
+源码：`src/admin-page.js`（页面）、`src/admin-auth.js`（登录校验）、`src/index.js`（路由/持久化）。
+入口 `https://glm.knowflow.work/admin`，支持分页列表、搜索已加载记录、签发、修改备注和每日额度、撤销。
+完整令牌只在创建时显示一次，列表不返回令牌或哈希。撤销不可恢复，补发需创建新令牌。
+修改额度不清零用量；用量按 UTC 日重置，全服务每日共享上限仍为 Agent 100 / OCR 500。
+
+上线配置：
+1. Cloudflare Zero Trust → Access → Applications 新建 Self-hosted 应用，保护
+   `glm.knowflow.work/admin` 及所有子路径，确认 `/admin/api/clients` 同样被保护。
+   不要保护整个域名，避免拦截桌面客户端 `/v1/agent`、`/v1/ocr`。
+2. 开启 One-time PIN 登录，Allow 策略仅含 `aihehe123@gmail.com`，不要配置 Everyone 或 Bypass。
+3. Worker 配置 `ACCESS_TEAM_DOMAIN=https://<team>.cloudflareaccess.com`（无尾斜杠）、
+   `ACCESS_AUD=<Access 应用 AUD>`、`ADMIN_EMAILS=aihehe123@gmail.com`。
+   将配置同步到 Wrangler vars 或部署配置，避免后续部署覆盖 Dashboard 配置。
+4. 部署后验证匿名登录跳转、其他邮箱拒绝、管理员增发/编辑/撤销测试令牌。
+   检查另一个自定义域名和 workers.dev 上的后台也不能匿名访问。
+
+缺配置返回 503，无效/缺失 JWT 返回 401，非管理员邮箱返回 403。
+Worker 验证 JWT 的 RS256 签名、issuer、audience、有效期、邮箱；写入还检查同源 Origin 和自定义头。
+后台不使用或暴露 PROBE_TOKEN；原 `/v1/admin/clients` 管理脚本继续使用管理员密钥。
+本地测试不代表线上 Access 配置或真实邮箱登录已通过验收。

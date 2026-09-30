@@ -11,7 +11,8 @@
     "client:create": "node provision-client.mjs"
   },
   "dependencies": {
-    "@cloudflare/containers": "0.3.7"
+    "@cloudflare/containers": "0.3.7",
+    "jose": "^6.2.12"
   },
   "devDependencies": {
     "wrangler": "4.127.0"
